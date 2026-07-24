@@ -1,0 +1,17 @@
+services:
+  docling-backend:
+    build:
+      context: ./backend
+    container_name: code2text-docling
+    ports:
+      - "8000:8000"
+    environment:
+      ALLOWED_ORIGINS: "*"
+      MAX_UPLOAD_BYTES: "157286400"
+      CONVERSION_TIMEOUT_SECONDS: "240"
+    volumes:
+      - docling-cache:/root/.cache
+    restart: unless-stopped
+
+volumes:
+  docling-cache:

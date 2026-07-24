@@ -1,94 +1,198 @@
-# 🧠 Code2Text
+# 🧠 Code2Text Universal
 
-**Convierte cualquier proyecto comprimido en un único archivo de texto optimizado para LLMs.**
+Convierte proyectos comprimidos y documentos en un único archivo de texto estructurado, pensado para proporcionar contexto a modelos de lenguaje.
 
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-blue?logo=github)](https://svn11x.github.io/code2text/)
+Esta versión amplía el proyecto original para que los archivos que antes se marcaban simplemente como **binarios** puedan pasar por extractores especializados.
 
----
+## Qué puede extraer
 
-## 📖 Descripción
+| Familia | Formatos principales | Ejecución | Contenido recuperado |
+|---|---|---|---|
+| Código y texto | TXT, MD, JSON, XML, YAML, código fuente y configuraciones | Navegador | Texto completo y limpieza opcional de comentarios |
+| Microsoft Word | DOCX, DOCM, DOTX, DOTM | Navegador | Títulos, párrafos, listas, tablas, enlaces, notas y texto de cuadros compatibles |
+| Microsoft Excel | XLSX, XLS, XLSB, XLSM, XLTX, XLTM, ODS | Navegador | Hojas, valores visibles y fórmulas |
+| Microsoft PowerPoint | PPTX, PPTM, PPSX, PPSM, POTX, POTM | Navegador | Texto ordenado por diapositiva, tablas y notas del presentador |
+| Microsoft Visio | VSDX, VSDM, VSSX, VSTX y variantes | Navegador | Textos contenidos en formas y páginas |
+| PDF | PDF con capa de texto | Navegador | Metadatos básicos y contenido separado por página |
+| RTF | RTF | Navegador | Texto normalizado |
+| OCR y formatos complejos | PDF escaneado, imágenes, audio, video, correo y otros formatos compatibles con Docling | Backend opcional | Markdown producido por Docling |
+| Microsoft Office antiguo | DOC, PPT y otros formatos antiguos convertibles | Backend opcional | Conversión temporal con LibreOffice y extracción posterior con Docling |
 
-**Code2Text** es una herramienta web que toma un archivo `.zip` con el código fuente de tu proyecto y genera un archivo `.txt` consolidado con:
+> **Importante:** DOCX, XLSX, PPTX y VSDX son contenedores comprimidos con XML. Aunque el navegador los detecta como binarios, no necesitan enviarse a un servidor para extraer su contenido.
 
-- Una **estructura de árbol** del proyecto.
-- El contenido de **todos los archivos de texto** (código, configuración, documentación), limpio de comentarios innecesarios.
-- Un formato especial pensado para ser pegado directamente en asistentes de IA como ChatGPT, Claude, Gemini, etc.
+## Resultado generado
 
-Ideal para compartir el contexto completo de un proyecto con un modelo de lenguaje sin tener que copiar y pegar archivo por archivo.
+El archivo descargado conserva la estructura compatible con Code2Text:
 
-## ✨ Características
-
-- ✅ **Detección automática de archivos de texto**: no importa la extensión, si es texto legible se incluye. Los binarios se omiten del contenido (pero aparecen en el árbol).
-- 🌳 **Árbol jerárquico visual** de toda la estructura del ZIP.
-- 🧹 **Limpieza inteligente de comentarios** para Python, C/C++, JavaScript, XML, YAML, etc. (conserva shebangs).
-- 🔍 **Buscador integrado** para filtrar archivos dentro del ZIP antes de procesar.
-- 🎨 **Interfaz oscura moderna** con soporte para arrastrar y soltar archivos.
-- 📦 **Funciona 100% en el navegador** (no se suben datos a ningún servidor).
-- 🚀 **Listo para GitHub Pages**: solo necesitas alojar el HTML.
-
-## 🖥️ Demo en vivo
-
-Puedes probar la herramienta directamente desde GitHub Pages:
-
-👉 **👉 **[https://svn11x.github.io/conversor_code/](https://svn11x.github.io/code2text/)****  
-
-## 📥 Cómo usar
-
-1. **Abre la página** de Code2Text (localmente o desde GitHub Pages).
-2. **Arrastra o selecciona** un archivo `.zip` que contenga tu proyecto.
-3. (Opcional) Usa el buscador para filtrar los archivos que se incluirán.
-4. Haz clic en **"Procesar y descargar"**.
-5. Se generará un archivo `code2text_nombre-del-zip_fecha.txt` con el siguiente formato:
-
-```
+```xml
 <estructura_proyecto>
-src/
-├── main.py
-├── utils/
-│   └── helpers.py
-└── config.yaml
+entrada/
+├── src/
+│   └── app.js
+└── documentos/
+    └── informe.docx
 </estructura_proyecto>
 
-<documentos_codigo>
-  <archivo ruta="src/main.py" tipo=".py">
-    # contenido limpio de main.py
-  </archivo>
-  <archivo ruta="src/utils/helpers.py" tipo=".py">
-    # contenido de helpers.py
-  </archivo>
+<documentos_codigo version="2">
+  <archivo ruta="src/app.js" tipo=".js" metodo="text-decoder-local"><![CDATA[
+  // contenido
+  ]]></archivo>
+  <archivo ruta="documentos/informe.docx" tipo=".docx" metodo="mammoth-local"><![CDATA[
+  # Título del informe
   ...
+  ]]></archivo>
 </documentos_codigo>
 ```
 
-¡Listo! Ya puedes copiar el contenido de ese `.txt` y pegarlo en tu LLM favorito.
+También puede incluir:
 
-## 🔧 Tecnologías utilizadas
+- `<archivos_omitidos>` con la razón de cada omisión.
+- `<advertencias>` para PDF sin texto, hojas truncadas, conversiones antiguas o errores parciales.
+- El atributo `metodo`, que permite saber si se usó Mammoth, SheetJS, PDF.js, OOXML local o Docling.
 
-- **HTML5 + CSS3** (diseño responsive, tema oscuro).
-- **JavaScript (ES6+)** – Lógica de procesamiento de ZIP y detección de texto.
-- **[JSZip](https://stuk.github.io/jszip/)** – Lectura de archivos comprimidos en el navegador.
-- **GitHub Pages** – Despliegue estático sin backend.
+## Uso sin instalar nada
 
-## 🗂️ Estructura del proyecto
+1. Publica el contenido del repositorio mediante **GitHub Pages**.
+2. Abre la página desde el navegador.
+3. Arrastra un ZIP o selecciona uno o varios documentos.
+4. Revisa la vista previa y pulsa **Procesar y descargar**.
 
+Los archivos Word, Excel, PowerPoint, PDF con texto, Visio, RTF y archivos de código se procesan en el equipo del usuario.
+
+### Probar localmente la página
+
+Desde la carpeta del proyecto:
+
+```bash
+python -m http.server 8080
 ```
-code2text/
-├── index.html          # Archivo principal (autocontenido)
-└── README.md           # Este archivo
+
+Después abre:
+
+```text
+http://localhost:8080
 ```
 
-## ⚙️ Cómo desplegar en GitHub Pages
+Se recomienda usar un servidor local en vez de abrir `index.html` con `file://`, especialmente para PDF.js.
 
-1. Haz un fork de este repositorio o crea uno nuevo con el contenido.
-2. Ve a **Settings > Pages**.
-3. En *Source*, selecciona `main` (o `master`) y la carpeta `/ (root)`.
-4. Haz clic en **Save**.
-5. En unos segundos, tu sitio estará disponible en `https://tuusuario.github.io/code2text`.
+## Publicar en GitHub Pages
 
-## 🧪 Limitaciones conocidas
+1. Sube `index.html`, `README.md` y las demás carpetas al repositorio.
+2. Abre **Settings → Pages**.
+3. Selecciona **Deploy from a branch**.
+4. Elige la rama principal y la carpeta `/ (root)`.
+5. Guarda los cambios.
 
-- Los archivos binarios grandes (>100 MB) pueden ralentizar el análisis inicial (pero no se incluirán en el resultado final).
-- La limpieza de comentarios es básica; no maneja casos extremos como comentarios anidados en algunos lenguajes.
-- No se conserva la estructura de directorios vacíos (solo se muestran los que contienen archivos).
+El backend no se ejecuta en GitHub Pages. La extracción local seguirá funcionando sin él.
 
-¿Quieres que genere también un archivo `LICENSE` con el texto de MIT?
+## Backend Docling opcional
+
+El backend se utiliza únicamente para:
+
+- OCR de PDF escaneado.
+- Imágenes.
+- Formatos que no poseen extractor local.
+- DOC y PPT antiguos, que se convierten primero mediante LibreOffice.
+- Extracción avanzada cuando PDF.js no encuentra una capa de texto útil.
+
+### Requisitos recomendados
+
+- Docker Desktop o Docker Engine con Compose.
+- Al menos 8 GB de RAM disponibles; 12 GB o más mejora el procesamiento de PDF complejos.
+- Espacio suficiente para la imagen, modelos y caché de Docling.
+
+### Iniciar el backend
+
+```bash
+docker compose up --build
+```
+
+Comprueba su estado en:
+
+```text
+http://localhost:8000/health
+```
+
+En la página, abre **Extracción avanzada con Docling** e introduce:
+
+```text
+http://localhost:8000
+```
+
+Luego pulsa **Probar conexión**.
+
+### GitHub Pages y HTTPS
+
+Una página publicada por GitHub Pages usa HTTPS. Algunos navegadores pueden bloquear solicitudes hacia un backend HTTP externo por contenido mixto. Para producción, publica el backend detrás de HTTPS. Para pruebas locales, abre la página con `python -m http.server 8080` y usa el backend HTTP de Docker.
+
+### Configuración del backend
+
+Variables disponibles en `docker-compose.yml`:
+
+| Variable | Uso |
+|---|---|
+| `ALLOWED_ORIGINS` | Orígenes permitidos por CORS. En producción conviene indicar la URL exacta de GitHub Pages. |
+| `MAX_UPLOAD_BYTES` | Tamaño máximo por archivo enviado al backend. |
+| `CONVERSION_TIMEOUT_SECONDS` | Tiempo máximo para conversiones de LibreOffice. |
+
+Ejemplo de origen restringido:
+
+```yaml
+environment:
+  ALLOWED_ORIGINS: "https://usuario.github.io"
+```
+
+## Arquitectura
+
+```text
+code2text-universal/
+├── index.html
+├── README.md
+├── THIRD_PARTY_NOTICES.md
+├── docker-compose.yml
+└── backend/
+    ├── app.py
+    ├── Dockerfile
+    └── requirements.txt
+```
+
+### Modo local
+
+- **JSZip** abre el proyecto ZIP y los contenedores OOXML.
+- **Mammoth.js** convierte Word moderno a HTML semántico, que luego se transforma a Markdown seguro.
+- **SheetJS** lee formatos de Excel modernos y antiguos.
+- **PDF.js** extrae la capa de texto de PDF.
+- Un extractor OOXML propio procesa PowerPoint y Visio.
+
+### Modo avanzado
+
+- El navegador envía exclusivamente el archivo que necesita extracción avanzada.
+- El backend lo guarda en un directorio temporal.
+- Los formatos DOC/PPT antiguos se convierten con LibreOffice.
+- Docling produce Markdown.
+- El directorio temporal se elimina al terminar.
+
+## Limitaciones conocidas
+
+- PDF.js no realiza OCR. Un PDF compuesto solo por imágenes necesita el backend.
+- La extracción local de PowerPoint y Visio recupera texto y tablas, pero no interpreta visualmente diagramas, flechas, fotografías ni relaciones espaciales complejas.
+- Los archivos protegidos con contraseña no se pueden procesar localmente.
+- Los macros VBA se ignoran y nunca se ejecutan.
+- Los libros Excel extremadamente grandes se limitan a 250.000 celdas y 500 columnas por hoja para evitar bloquear el navegador; el archivo de salida registra la advertencia.
+- Publisher (`.pub`), OneNote (`.one`) y algunos `.msg` pueden no ser compatibles incluso con el backend, según la versión y estructura del archivo.
+- La limpieza de comentarios es heurística; puede desactivarse desde la interfaz cuando se requiera fidelidad absoluta del código.
+- Ninguna solución estática en GitHub Pages puede ejecutar Docling dentro de la página: Docling utiliza Python, modelos y dependencias nativas. Por eso el diseño separa el modo local del backend avanzado.
+
+## Seguridad
+
+- El modo local no sube documentos.
+- No se ejecutan macros, scripts incrustados ni enlaces.
+- Los documentos Word se convierten a una representación intermedia y no se insertan como HTML activo en la interfaz.
+- El backend debe ejecutarse en un contenedor aislado y mantenerse actualizado porque procesa archivos no confiables mediante bibliotecas complejas.
+- Antes de exponer el backend en Internet, agrega autenticación, HTTPS, límites de solicitudes y un proxy inverso.
+
+## Dependencias
+
+La página carga bibliotecas desde CDN para conservar el repositorio simple y compatible con GitHub Pages. En entornos corporativos aislados, descarga esas bibliotecas, guárdalas en una carpeta `vendor/` y reemplaza las URL de los `<script>` por rutas locales.
+
+Consulta `THIRD_PARTY_NOTICES.md` para licencias y proyectos utilizados.

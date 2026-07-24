@@ -1,816 +1,927 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Code2Text · Modo Texto Universal</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-        }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Extrae código y contenido de documentos Microsoft, PDF y otros formatos directamente en el navegador.">
+  <title>Code2Text Universal · Document Extractor</title>
 
-        body {
-            background: #0b0f14;
-            color: #e2e8f0;
-            font-family: 'Segoe UI', 'Roboto', system-ui, sans-serif;
-            max-width: 1000px;
-            margin: 2rem auto;
-            padding: 0 1.5rem;
-            line-height: 1.6;
-        }
+  <!-- Dependencias cargadas desde CDN. Para una instalación totalmente aislada, véase README.md. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/mammoth@1.12.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
-        h2 {
-            font-weight: 500;
-            letter-spacing: -0.01em;
-            border-bottom: 1px solid #2d3748;
-            padding-bottom: 0.5rem;
-            margin-bottom: 1.5rem;
-            color: #a5f3fc;
-        }
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071018;
+      --panel: #101a25;
+      --panel-2: #162332;
+      --border: #2c4155;
+      --text: #e5eef7;
+      --muted: #9db0c3;
+      --accent: #2dd4bf;
+      --accent-2: #67e8f9;
+      --success: #86efac;
+      --warning: #fcd34d;
+      --danger: #fca5a5;
+      --shadow: 0 16px 40px rgba(0, 0, 0, .28);
+    }
 
-        h3 {
-            font-weight: 500;
-            color: #b9d0e0;
-            margin: 1.2rem 0 0.8rem;
-        }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(45, 212, 191, .12), transparent 30rem),
+        radial-gradient(circle at 90% 20%, rgba(103, 232, 249, .08), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, "Segoe UI", Roboto, system-ui, sans-serif;
+      line-height: 1.55;
+    }
 
-        p {
-            color: #cbd5e1;
-            margin-bottom: 1.5rem;
-        }
+    .shell { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 42px 0 64px; }
+    header { margin-bottom: 28px; }
+    h1 { margin: 0 0 8px; font-size: clamp(1.8rem, 4vw, 2.7rem); letter-spacing: -.04em; }
+    h1 span { color: var(--accent-2); }
+    header p { margin: 0; max-width: 820px; color: var(--muted); font-size: 1.02rem; }
 
-        /* Panel de formatos (informativo) */
-        .formats-panel {
-            background: #11161e;
-            border-radius: 20px;
-            padding: 1.2rem 1.5rem;
-            margin: 2rem 0 1rem;
-            border: 1px solid #2d3a4a;
-        }
+    .panel {
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+      margin-top: 18px;
+      backdrop-filter: blur(10px);
+    }
 
-        .formats-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 1rem;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
+    .dropzone {
+      display: grid;
+      place-items: center;
+      min-height: 210px;
+      padding: 28px;
+      border: 2px dashed #426178;
+      border-radius: 18px;
+      text-align: center;
+      background: rgba(22, 35, 50, .62);
+      transition: .18s ease;
+    }
+    .dropzone.dragging { border-color: var(--accent); background: rgba(45, 212, 191, .08); transform: translateY(-1px); }
+    .drop-icon { font-size: 2.4rem; margin-bottom: 10px; }
+    .dropzone strong { display: block; font-size: 1.08rem; }
+    .dropzone small { display: block; color: var(--muted); margin: 8px auto 18px; max-width: 720px; }
+    input[type=file] { display: none; }
 
-        .formats-search {
-            display: flex;
-            align-items: center;
-            background: #1e2532;
-            border-radius: 40px;
-            padding: 0.3rem 0.3rem 0.3rem 1rem;
-            border: 1px solid #3a4a5e;
-            flex: 2;
-            min-width: 220px;
-        }
+    .button, button {
+      appearance: none;
+      border: 1px solid #3c6a72;
+      border-radius: 999px;
+      padding: 11px 20px;
+      background: #123b3b;
+      color: white;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: .16s ease;
+    }
+    .button:hover, button:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--accent); background: #155e59; }
+    button.primary { background: #0f766e; border-color: #5eead4; min-width: 245px; padding: 13px 24px; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
 
-        .formats-search input {
-            background: transparent;
-            border: none;
-            color: #e2e8f0;
-            font-size: 0.95rem;
-            padding: 0.5rem 0;
-            width: 100%;
-            outline: none;
-        }
+    .selected-summary { min-height: 24px; margin-top: 14px; color: var(--muted); }
+    .selected-summary strong { color: var(--text); }
 
-        .formats-search input::placeholder {
-            color: #7f8ea3;
-        }
+    .options-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .option-card { border: 1px solid var(--border); border-radius: 16px; background: var(--panel-2); padding: 15px; }
+    .option-card label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+    .option-card input[type=checkbox] { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); }
+    .option-card b { display: block; }
+    .option-card span { color: var(--muted); font-size: .9rem; }
 
-        .formats-stats {
-            font-size: 0.85rem;
-            background: #1e2a3a;
-            padding: 0.3rem 1rem;
-            border-radius: 30px;
-            color: #b9d0e0;
-        }
+    details.advanced { margin-top: 14px; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+    details.advanced summary { padding: 14px 16px; cursor: pointer; background: var(--panel-2); font-weight: 700; }
+    .advanced-body { padding: 16px; }
+    .advanced-body p { color: var(--muted); margin: 0 0 12px; }
+    .field-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+    input[type=url], input[type=text] {
+      width: 100%; border: 1px solid var(--border); background: #0a141e; color: var(--text);
+      border-radius: 12px; padding: 11px 13px; font: inherit; outline: none;
+    }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(45, 212, 191, .1); }
 
-        .chips-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            max-height: 180px;
-            overflow-y: auto;
-            padding: 5px 2px;
-        }
+    .preview-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+    .stats { color: var(--muted); font-size: .9rem; white-space: nowrap; }
+    .file-list { margin-top: 14px; max-height: 390px; overflow: auto; border: 1px solid var(--border); border-radius: 14px; }
+    .file-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid rgba(44, 65, 85, .65); }
+    .file-item:last-child { border-bottom: 0; }
+    .file-item:hover { background: rgba(255,255,255,.025); }
+    .file-path { overflow-wrap: anywhere; }
+    .file-meta { color: var(--muted); font-size: .78rem; margin-top: 2px; }
+    .badge { border: 1px solid var(--border); background: #1b2d3e; border-radius: 999px; padding: 3px 9px; font-size: .72rem; color: #c8d8e8; white-space: nowrap; }
+    .badge.local { border-color: #2c746d; color: #99f6e4; }
+    .badge.remote { border-color: #846b2e; color: #fde68a; }
+    .badge.skip { border-color: #7f3d46; color: #fecaca; }
+    .empty { color: var(--muted); padding: 24px; text-align: center; }
 
-        .chip {
-            background: #1e2a3a;
-            color: #cbd5e1;
-            padding: 0.2rem 1rem;
-            border-radius: 30px;
-            font-size: 0.8rem;
-            font-family: 'JetBrains Mono', monospace;
-            border: 1px solid #30445c;
-            transition: all 0.1s;
-        }
+    .action-row { display: flex; justify-content: center; margin-top: 18px; }
+    #status { min-height: 86px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "Cascadia Code", Consolas, monospace; font-size: .88rem; color: #c7d8e9; }
+    #status .ok { color: var(--success); font-weight: 700; }
+    #status .warn { color: var(--warning); }
+    #status .error { color: var(--danger); font-weight: 700; }
+    progress { width: 100%; height: 10px; margin-top: 14px; accent-color: var(--accent); }
 
-        .chip.special {
-            background: #1f3a4b;
-            border-color: #2b7a8a;
-            color: #8cd4ff;
-        }
+    .format-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .format-card { border: 1px solid var(--border); border-radius: 16px; background: var(--panel-2); padding: 14px; }
+    .format-card strong { display: block; margin-bottom: 4px; }
+    .format-card span { color: var(--muted); font-size: .86rem; }
+    .privacy-note { color: var(--muted); font-size: .88rem; margin-top: 13px; }
+    code { color: #a5f3fc; background: #122231; border-radius: 6px; padding: 1px 5px; }
 
-        .chip:hover {
-            background: #2a3a50;
-        }
-
-        .dropzone {
-            background: #1a1f2a;
-            border: 2px dashed #3a4556;
-            border-radius: 24px;
-            padding: 2rem 2rem;
-            text-align: center;
-            transition: border 0.2s, background 0.2s;
-            margin-bottom: 1.5rem;
-        }
-
-        .dropzone:hover {
-            border-color: #5eead4;
-            background: #1e2532;
-        }
-
-        .file-label {
-            display: inline-block;
-            background: #2d3b4f;
-            color: #e2e8f0;
-            padding: 0.75rem 1.8rem;
-            border-radius: 60px;
-            font-weight: 500;
-            cursor: pointer;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            transition: all 0.15s;
-            border: 1px solid #4b5e77;
-        }
-
-        .file-label:hover {
-            background: #3e526b;
-            border-color: #7aa3b8;
-        }
-
-        input[type="file"] {
-            display: none;
-        }
-
-        .file-name {
-            margin-top: 1rem;
-            font-size: 0.9rem;
-            color: #9ab3cf;
-            min-height: 1.5rem;
-        }
-
-        .actions {
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-            margin: 1.8rem 0 1rem;
-        }
-
-        button {
-            background: #0f4c5c;
-            color: white;
-            border: none;
-            padding: 0.9rem 2.2rem;
-            border-radius: 60px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            box-shadow: 0 8px 16px rgba(0,20,30,0.5);
-            transition: all 0.2s;
-            border: 1px solid #2b7a8a;
-            letter-spacing: 0.3px;
-        }
-
-        button:enabled {
-            background: #0d9488;
-            border-color: #5eead4;
-            box-shadow: 0 4px 12px rgba(13,148,136,0.3);
-        }
-
-        button:enabled:hover {
-            background: #14b8a6;
-            transform: translateY(-1px);
-            box-shadow: 0 10px 20px rgba(13,148,136,0.4);
-        }
-
-        button:disabled {
-            background: #334155;
-            border-color: #475569;
-            box-shadow: none;
-            color: #94a3b8;
-            cursor: not-allowed;
-        }
-
-        /* Panel de vista previa (archivos del zip) */
-        .preview-panel {
-            background: #11161e;
-            border-radius: 20px;
-            padding: 1.2rem 1.5rem;
-            margin: 1.5rem 0 0.5rem;
-            border: 1px solid #2d3a4a;
-        }
-
-        .search-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 1rem;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-
-        .search-box {
-            display: flex;
-            align-items: center;
-            background: #1e2532;
-            border-radius: 40px;
-            padding: 0.3rem 0.3rem 0.3rem 1rem;
-            border: 1px solid #3a4a5e;
-            flex: 2;
-            min-width: 220px;
-        }
-
-        .search-box input {
-            background: transparent;
-            border: none;
-            color: #e2e8f0;
-            font-size: 0.95rem;
-            padding: 0.5rem 0;
-            width: 100%;
-            outline: none;
-        }
-
-        .file-stats {
-            font-size: 0.85rem;
-            background: #1e2a3a;
-            padding: 0.3rem 1rem;
-            border-radius: 30px;
-            color: #b9d0e0;
-        }
-
-        .file-list {
-            max-height: 280px;
-            overflow-y: auto;
-            font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
-            font-size: 0.85rem;
-            margin-top: 0.8rem;
-            padding-right: 5px;
-        }
-
-        .file-item {
-            padding: 0.3rem 0.5rem;
-            border-bottom: 1px solid #253040;
-            color: #b9d0e0;
-            word-break: break-all;
-            display: flex;
-            align-items: baseline;
-        }
-
-        .file-item .ext-badge {
-            background: #1f3a4b;
-            padding: 0.1rem 0.5rem;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            margin-left: 10px;
-            color: #8cd4ff;
-            flex-shrink: 0;
-        }
-
-        .file-item.binary {
-            opacity: 0.6;
-        }
-
-        .file-item .binary-tag {
-            background: #5e3a3a;
-            color: #f4a2a2;
-            margin-left: 8px;
-        }
-
-        .file-item:hover {
-            background: #1b2533;
-        }
-
-        .no-files {
-            color: #7f8ea3;
-            font-style: italic;
-            padding: 0.8rem;
-            text-align: center;
-        }
-
-        #status {
-            background: #11161e;
-            border-radius: 20px;
-            padding: 1.5rem;
-            margin-top: 1.8rem;
-            font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
-            font-size: 0.9rem;
-            white-space: pre-wrap;
-            word-break: break-word;
-            border: 1px solid #2d3a4a;
-            color: #b9d0e0;
-            max-height: 200px;
-            overflow-y: auto;
-            box-shadow: inset 0 0 8px #00000033;
-        }
-
-        .error {
-            color: #f87171;
-            font-weight: 600;
-        }
-
-        .success-badge {
-            color: #6ee7b7;
-        }
-
-        /* scrollbar */
-        .chips-container::-webkit-scrollbar,
-        .file-list::-webkit-scrollbar, 
-        #status::-webkit-scrollbar {
-            width: 6px;
-        }
-        .chips-container::-webkit-scrollbar-track,
-        .file-list::-webkit-scrollbar-track, 
-        #status::-webkit-scrollbar-track {
-            background: #1e293b;
-            border-radius: 8px;
-        }
-        .chips-container::-webkit-scrollbar-thumb,
-        .file-list::-webkit-scrollbar-thumb, 
-        #status::-webkit-scrollbar-thumb {
-            background: #475569;
-            border-radius: 8px;
-        }
-
-        .info-note {
-            font-size: 0.85rem;
-            margin-top: 0.5rem;
-            color: #8fa6c2;
-        }
-    </style>
+    @media (max-width: 800px) {
+      .options-grid, .format-grid { grid-template-columns: 1fr 1fr; }
+      .preview-head, .field-row { grid-template-columns: 1fr; }
+      .stats { white-space: normal; }
+    }
+    @media (max-width: 520px) {
+      .shell { width: min(100% - 20px, 1120px); padding-top: 24px; }
+      .panel { padding: 14px; border-radius: 17px; }
+      .options-grid, .format-grid { grid-template-columns: 1fr; }
+      .file-item { grid-template-columns: auto minmax(0, 1fr); }
+      .file-item .badge { grid-column: 2; justify-self: start; }
+    }
+  </style>
 </head>
 <body>
+<main class="shell">
+  <header>
+    <h1>🧠 Code2Text <span>Universal</span></h1>
+    <p>Convierte proyectos ZIP y documentos binarios en un único archivo de texto preparado para LLM. Word, Excel, PowerPoint, PDF y Visio se procesan localmente en el navegador.</p>
+  </header>
 
-<h2>🧠 Code2Text · Universal Text Extractor</h2>
-<p>Sube un archivo <code style="background:#1e2a3a; padding:2px 8px; border-radius:20px;">.zip</code>. Se extraerá todo archivo de texto (código, config, docs) ignorando binarios. Ideal para LLMs.</p>
+  <section class="panel">
+    <div id="dropzone" class="dropzone">
+      <div>
+        <div class="drop-icon">📦</div>
+        <strong>Arrastra un ZIP o documentos aquí</strong>
+        <small>Puedes elegir uno o varios archivos. Los ZIP se expanden y los documentos compatibles se convierten sin subirlos a un servidor.</small>
+        <label class="button" for="fileInput">Seleccionar archivos</label>
+        <input id="fileInput" type="file" multiple accept=".zip,.docx,.docm,.dotx,.dotm,.xlsx,.xls,.xlsb,.xlsm,.xltx,.xltm,.pptx,.pptm,.ppsx,.ppsm,.potx,.potm,.pdf,.vsdx,.vsdm,.vssx,.vstx,.rtf,.txt,.md,.csv,.json,.xml,.yaml,.yml,.doc,.ppt,.msg,.one,.pub,.png,.jpg,.jpeg,.tif,.tiff">
+        <div id="selectedSummary" class="selected-summary">Ningún archivo seleccionado.</div>
+      </div>
+    </div>
+  </section>
 
-<div class="dropzone">
-    <label class="file-label" for="fileInput">
-        <span style="font-size:1.2rem;">📁</span> Seleccionar archivo ZIP
-    </label>
-    <input type="file" id="fileInput" accept=".zip,application/zip">
-    <div id="fileNameDisplay" class="file-name">Ningún archivo seleccionado</div>
-</div>
+  <section class="panel">
+    <div class="options-grid">
+      <div class="option-card">
+        <label>
+          <input id="cleanComments" type="checkbox" checked>
+          <span><b>Limpiar comentarios del código</b>Reduce comentarios en lenguajes conocidos. Los documentos Office y PDF no se alteran.</span>
+        </label>
+      </div>
+      <div class="option-card">
+        <label>
+          <input id="includeOmitted" type="checkbox" checked>
+          <span><b>Registrar archivos no extraídos</b>Incluye extensión, tamaño y motivo para no perder trazabilidad.</span>
+        </label>
+      </div>
+    </div>
 
-<!-- Panel de vista previa -->
-<div id="previewPanel" class="preview-panel" style="display: none;">
-    <div class="search-header">
-        <div class="search-box">
-            <span style="margin-right:6px;">🔍</span>
-            <input type="text" id="searchInput" placeholder="Buscar por nombre o extensión..." autocomplete="off">
+    <details class="advanced">
+      <summary>Extracción avanzada con Docling (opcional)</summary>
+      <div class="advanced-body">
+        <p>Permite OCR para PDF escaneado, imágenes y otros formatos. Requiere iniciar el backend incluido en la carpeta <code>backend</code>. Déjalo vacío para trabajar 100% local.</p>
+        <div class="field-row">
+          <input id="doclingEndpoint" type="url" placeholder="http://localhost:8000" aria-label="Dirección del backend Docling">
+          <button id="testBackendBtn" type="button">Probar conexión</button>
         </div>
-        <div class="file-stats" id="fileStats">0 archivos</div>
-    </div>
-    <div id="fileListContainer" class="file-list"></div>
-    <div class="info-note" id="binaryNote"></div>
-</div>
+      </div>
+    </details>
+  </section>
 
-<div class="actions">
-    <button id="processBtn" disabled>⚡ Procesar y descargar</button>
-</div>
-
-<div id="status">
-    <span style="opacity:0.7;">✨ Listo para procesar...</span>
-</div>
-
-<!-- Panel informativo de formatos (al final, solo como referencia) -->
-<div class="formats-panel">
-    <div class="formats-header">
-        <div class="formats-search">
-            <span style="margin-right:6px;">📋</span>
-            <input type="text" id="formatsSearchInput" placeholder="Buscar extensión de ejemplo..." autocomplete="off">
-        </div>
-        <div class="formats-stats" id="formatsStats">Extensiones comunes</div>
+  <section id="previewPanel" class="panel" hidden>
+    <div class="preview-head">
+      <input id="searchInput" type="text" placeholder="Buscar archivo, extensión o método..." autocomplete="off">
+      <div id="fileStats" class="stats">0 archivos</div>
     </div>
-    <div id="chipsContainer" class="chips-container">
-        <!-- chips de extensiones comunes (solo referencia) -->
+    <div id="fileList" class="file-list"><div class="empty">Sin archivos.</div></div>
+    <div id="binaryNote" class="privacy-note"></div>
+  </section>
+
+  <div class="action-row">
+    <button id="processBtn" class="primary" disabled>⚡ Procesar y descargar</button>
+  </div>
+
+  <section class="panel">
+    <div id="status">✨ Listo para comenzar.</div>
+    <progress id="progressBar" value="0" max="100" hidden></progress>
+  </section>
+
+  <section class="panel">
+    <div class="format-grid">
+      <div class="format-card"><strong>Word</strong><span>DOCX, DOCM, DOTX y DOTM. Conserva títulos, listas, tablas, enlaces y notas compatibles.</span></div>
+      <div class="format-card"><strong>Excel</strong><span>XLSX, XLS, XLSB, XLSM y plantillas. Incluye hojas, celdas y fórmulas.</span></div>
+      <div class="format-card"><strong>PowerPoint</strong><span>PPTX, PPTM, PPSX y plantillas. Extrae texto por diapositiva y notas.</span></div>
+      <div class="format-card"><strong>PDF y Visio</strong><span>PDF con capa de texto y archivos VSDX/VSDM. OCR disponible mediante backend.</span></div>
     </div>
-    <div class="info-note">✅ Se procesan automáticamente todos los archivos de texto. Arriba solo ejemplos.</div>
-</div>
+    <div class="privacy-note">🔒 En modo local, los archivos permanecen en tu equipo. El modo Docling solo envía los archivos que no pueden procesarse localmente al endpoint configurado.</div>
+  </section>
+</main>
 
 <script>
-    (function(){
-        "use strict";
+(() => {
+  "use strict";
 
-        // ----- DOM -----
-        const fileInput = document.getElementById('fileInput');
-        const processBtn = document.getElementById('processBtn');
-        const statusDiv = document.getElementById('status');
-        const fileNameDisplay = document.getElementById('fileNameDisplay');
-        const previewPanel = document.getElementById('previewPanel');
-        const searchInput = document.getElementById('searchInput');
-        const fileStats = document.getElementById('fileStats');
-        const fileListContainer = document.getElementById('fileListContainer');
-        const binaryNote = document.getElementById('binaryNote');
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
 
-        // Panel informativo
-        const formatsSearchInput = document.getElementById('formatsSearchInput');
-        const formatsStats = document.getElementById('formatsStats');
-        const chipsContainer = document.getElementById('chipsContainer');
+  const $ = (id) => document.getElementById(id);
+  const fileInput = $("fileInput");
+  const dropzone = $("dropzone");
+  const selectedSummary = $("selectedSummary");
+  const previewPanel = $("previewPanel");
+  const searchInput = $("searchInput");
+  const fileStats = $("fileStats");
+  const fileList = $("fileList");
+  const binaryNote = $("binaryNote");
+  const processBtn = $("processBtn");
+  const statusDiv = $("status");
+  const progressBar = $("progressBar");
+  const cleanComments = $("cleanComments");
+  const includeOmitted = $("includeOmitted");
+  const doclingEndpoint = $("doclingEndpoint");
+  const testBackendBtn = $("testBackendBtn");
 
-        // ----- Estado -----
-        let currentZipFile = null;
-        let allFilesInfo = [];               // { path, isText, size }
-        let filteredFilesInfo = [];
-        let textFilePaths = [];              // solo rutas de archivos de texto
+  const EXCLUDE_DIRS = new Set([
+    "__pycache__", ".git", ".venv", "venv", "env", ".env", "node_modules",
+    "z_code_file", "build", "dist", ".idea", ".vscode", "target", "out"
+  ]);
 
-        // ----- Configuración de exclusión -----
-        const EXCLUDE_DIRS = new Set([
-            "__pycache__", ".git", ".venv", "venv", "env", ".env", "node_modules", 
-            "z_code_file", "build", "dist", ".idea", ".vscode", "target", "out"
-        ]);
+  const WORD_EXTS = new Set([".docx", ".docm", ".dotx", ".dotm"]);
+  const SHEET_EXTS = new Set([".xlsx", ".xls", ".xlsb", ".xlsm", ".xltx", ".xltm", ".xlam", ".ods"]);
+  const SLIDE_EXTS = new Set([".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm"]);
+  const VISIO_EXTS = new Set([".vsdx", ".vsdm", ".vssx", ".vssm", ".vstx", ".vstm"]);
+  const PDF_EXTS = new Set([".pdf"]);
+  const RTF_EXTS = new Set([".rtf"]);
+  const REMOTE_EXTS = new Set([
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp",
+    ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".mp4", ".avi", ".mov",
+    ".eml", ".msg", ".epub", ".html", ".htm", ".doc", ".ppt", ".one", ".pub"
+  ]);
 
-        // Extensiones de ejemplo para el panel informativo (solo visual)
-        const EXAMPLE_EXTENSIONS = [
-            ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h", ".go", ".rs", ".php",
-            ".html", ".css", ".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-            ".sh", ".bash", ".ps1", ".bat", ".txt", ".md", ".rst", ".tex",
-            "Dockerfile", "Makefile", ".gitignore", ".dockerignore"
-        ].sort();
+  const MAX_EXCEL_CELLS_PER_SHEET = 250000;
+  const MAX_FILE_BYTES = 150 * 1024 * 1024;
+  const SMALL_CACHE_BYTES = 3 * 1024 * 1024;
 
-        // ----- Utilidad: detectar si un Uint8Array es texto (no binario) -----
-        function isTextData(uint8Array) {
-            // Un archivo se considera texto si menos del 5% de los primeros 8000 bytes son caracteres de control no comunes
-            const sampleSize = Math.min(uint8Array.length, 8000);
-            let controlCount = 0;
-            for (let i = 0; i < sampleSize; i++) {
-                const byte = uint8Array[i];
-                // Caracteres de control excepto: tab(9), newline(10), carriage return(13)
-                if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) {
-                    controlCount++;
-                }
-                // Si es 0 (nulo) es muy probable binario
-                if (byte === 0) {
-                    return false;
-                }
-            }
-            // Si más del 5% son caracteres de control extraños -> binario
-            return (controlCount / sampleSize) < 0.05;
+  let selectedFiles = [];
+  let items = [];
+  let filteredItems = [];
+  let busy = false;
+
+  function setStatus(html) { statusDiv.innerHTML = html; }
+  function setProgress(current, total) {
+    progressBar.hidden = false;
+    progressBar.max = Math.max(total, 1);
+    progressBar.value = current;
+  }
+  function hideProgress() { progressBar.hidden = true; progressBar.value = 0; }
+  function formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  }
+  function extensionOf(path) {
+    const name = path.split("/").pop() || path;
+    const idx = name.lastIndexOf(".");
+    return idx >= 0 ? name.slice(idx).toLowerCase() : "";
+  }
+  function baseName(path) { return path.split("/").pop() || path; }
+  function stripExt(name) { return name.replace(/\.[^.]+$/, ""); }
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
+  }
+  function escapeAttr(value) {
+    return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function cdata(value) { return String(value).replace(/\]\]>/g, "]]]]><![CDATA[>"); }
+  function exactArrayBuffer(bytes) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+  function parseXml(xml, label = "XML") {
+    const doc = new DOMParser().parseFromString(xml, "application/xml");
+    const error = doc.querySelector("parsererror");
+    if (error) throw new Error(`${label} inválido`);
+    return doc;
+  }
+  function nodesByLocalName(root, name) {
+    return Array.from(root.getElementsByTagNameNS("*", name));
+  }
+  function attrByLocalName(node, name) {
+    if (!node || !node.attributes) return "";
+    for (const attr of node.attributes) if (attr.localName === name) return attr.value;
+    return "";
+  }
+  function normalizeText(value) {
+    return String(value || "")
+      .replace(/\u0000/g, "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+$/g, ""))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  function decoderFor(bytes) {
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder("utf-16le");
+    if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be");
+    let evenNulls = 0, oddNulls = 0;
+    const n = Math.min(bytes.length, 2000);
+    for (let i = 0; i < n; i++) {
+      if (bytes[i] === 0) (i % 2 === 0 ? evenNulls++ : oddNulls++);
+    }
+    if (oddNulls > n * .18 && evenNulls < n * .03) return new TextDecoder("utf-16le");
+    if (evenNulls > n * .18 && oddNulls < n * .03) return new TextDecoder("utf-16be");
+    return new TextDecoder("utf-8", { fatal: false });
+  }
+
+  function isTextData(bytes) {
+    if (!bytes.length) return true;
+    const sampleSize = Math.min(bytes.length, 8000);
+    let controls = 0;
+    let nulls = 0;
+    for (let i = 0; i < sampleSize; i++) {
+      const b = bytes[i];
+      if (b === 0) nulls++;
+      if (b < 32 && b !== 9 && b !== 10 && b !== 13 && b !== 0) controls++;
+    }
+    const looksUtf16 = nulls > 0 && nulls / sampleSize < .55;
+    if (nulls && !looksUtf16) return false;
+    return controls / sampleSize < .05;
+  }
+
+  function classify(path, bytes) {
+    const ext = extensionOf(path);
+    if (WORD_EXTS.has(ext)) return { category: "word", extractable: true, local: true, label: "Word local", icon: "📝" };
+    if (SHEET_EXTS.has(ext)) return { category: "sheet", extractable: true, local: true, label: "Excel local", icon: "📊" };
+    if (SLIDE_EXTS.has(ext)) return { category: "slides", extractable: true, local: true, label: "PowerPoint local", icon: "📽️" };
+    if (VISIO_EXTS.has(ext)) return { category: "visio", extractable: true, local: true, label: "Visio local", icon: "🧩" };
+    if (PDF_EXTS.has(ext)) return { category: "pdf", extractable: true, local: true, label: "PDF local", icon: "📕" };
+    if (RTF_EXTS.has(ext)) return { category: "rtf", extractable: true, local: true, label: "RTF local", icon: "📄" };
+    if (isTextData(bytes)) return { category: "text", extractable: true, local: true, label: "Texto", icon: "📄" };
+    if (REMOTE_EXTS.has(ext)) return { category: "remote", extractable: false, local: false, label: "Requiere Docling", icon: "🧠" };
+    return { category: "binary", extractable: false, local: false, label: "Binario no compatible", icon: "🚫" };
+  }
+
+  async function makeZipItems(file, prefix) {
+    if (!window.JSZip) throw new Error("JSZip no pudo cargarse. Comprueba la conexión a Internet.");
+    const zip = await JSZip.loadAsync(file);
+    const entries = Object.entries(zip.files).filter(([, entry]) => !entry.dir);
+    const result = [];
+    for (let index = 0; index < entries.length; index++) {
+      const [path, entry] = entries[index];
+      const parts = path.split("/");
+      if (parts.some((part) => EXCLUDE_DIRS.has(part))) continue;
+      setStatus(`🔎 Escaneando ${escapeHtml(file.name)}: ${index + 1}/${entries.length}`);
+      const bytes = await entry.async("uint8array");
+      const finalPath = prefix ? `${prefix}/${path}` : path;
+      const type = classify(finalPath, bytes);
+      result.push({
+        path: finalPath,
+        originalName: baseName(path),
+        size: bytes.length,
+        ...type,
+        cache: bytes.length <= SMALL_CACHE_BYTES ? bytes : null,
+        getBytes: async () => entry.async("uint8array")
+      });
+      await microYield(index);
+    }
+    return result;
+  }
+
+  async function makeDirectItem(file, prefix = "") {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const path = prefix ? `${prefix}/${file.name}` : file.name;
+    const type = classify(path, bytes);
+    return {
+      path,
+      originalName: file.name,
+      size: bytes.length,
+      ...type,
+      cache: bytes.length <= SMALL_CACHE_BYTES ? bytes : null,
+      getBytes: async () => new Uint8Array(await file.arrayBuffer())
+    };
+  }
+
+  async function scanFiles(files) {
+    if (busy) return;
+    busy = true;
+    items = [];
+    processBtn.disabled = true;
+    previewPanel.hidden = false;
+    fileList.innerHTML = '<div class="empty">🔎 Analizando archivos...</div>';
+    hideProgress();
+
+    try {
+      const multipleRoots = files.length > 1;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.size > MAX_FILE_BYTES) {
+          items.push({
+            path: file.name, originalName: file.name, size: file.size,
+            category: "binary", extractable: false, local: false, label: "Supera 150 MB", icon: "⚠️",
+            getBytes: async () => new Uint8Array()
+          });
+          continue;
         }
-
-        // ----- Escanear ZIP (detección automática de texto) -----
-        async function scanZipAndPreview(file) {
-            previewPanel.style.display = 'block';
-            fileListContainer.innerHTML = '<div class="no-files">🔎 Escaneando archivos...</div>';
-            fileStats.textContent = '0 archivos';
-            binaryNote.textContent = '';
-            allFilesInfo = [];
-            textFilePaths = [];
-            
-            try {
-                const zip = new JSZip();
-                const contents = await zip.loadAsync(file);
-                const entries = Object.entries(contents.files);
-                
-                const tempInfo = [];
-                
-                for (const [path, zipEntry] of entries) {
-                    if (zipEntry.dir) continue;
-                    
-                    // Excluir directorios no deseados
-                    const pathParts = path.split('/');
-                    if (pathParts.some(part => EXCLUDE_DIRS.has(part))) continue;
-                    
-                    try {
-                        // Obtener datos como Uint8Array para análisis
-                        const data = await zipEntry.async("uint8array");
-                        const isText = isTextData(data);
-                        const size = data.length;
-                        
-                        tempInfo.push({
-                            path: path,
-                            isText: isText,
-                            size: size
-                        });
-                        
-                        if (isText) {
-                            textFilePaths.push(path);
-                        }
-                    } catch (e) {
-                        console.warn(`No se pudo leer ${path}`, e);
-                    }
-                }
-                
-                allFilesInfo = tempInfo.sort((a,b) => a.path.localeCompare(b.path));
-                textFilePaths.sort();
-                
-                // Actualizar contador
-                const totalText = allFilesInfo.filter(f => f.isText).length;
-                const totalBinary = allFilesInfo.length - totalText;
-                binaryNote.textContent = `📄 ${totalText} archivos de texto · 🚫 ${totalBinary} binarios omitidos`;
-                
-                filterAndRenderList();
-                
-            } catch (err) {
-                console.error('Error al escanear zip:', err);
-                fileListContainer.innerHTML = `<div class="no-files error">Error al leer el ZIP: ${err.message}</div>`;
-                allFilesInfo = [];
-                filterAndRenderList();
-            }
+        setProgress(i, files.length);
+        const ext = extensionOf(file.name);
+        if (ext === ".zip") {
+          const prefix = multipleRoots ? stripExt(file.name) : "";
+          items.push(...await makeZipItems(file, prefix));
+        } else {
+          items.push(await makeDirectItem(file));
         }
+      }
+      items.sort((a, b) => a.path.localeCompare(b.path));
+      selectedSummary.innerHTML = `<strong>${files.length}</strong> entrada(s), <strong>${items.length}</strong> archivo(s) detectado(s).`;
+      renderList();
+      processBtn.disabled = items.length === 0;
+      setStatus(`✅ Escaneo terminado. ${items.length} archivos encontrados.`);
+    } catch (error) {
+      console.error(error);
+      setStatus(`<span class="error">❌ Error al analizar: ${escapeHtml(error.message)}</span>`);
+      fileList.innerHTML = `<div class="empty">No fue posible leer los archivos.</div>`;
+    } finally {
+      hideProgress();
+      busy = false;
+    }
+  }
 
-        function filterAndRenderList() {
-            const query = searchInput.value.trim().toLowerCase();
-            if (query === '') {
-                filteredFilesInfo = [...allFilesInfo];
-            } else {
-                filteredFilesInfo = allFilesInfo.filter(f => f.path.toLowerCase().includes(query));
-            }
-            
-            const shown = filteredFilesInfo.length;
-            const total = allFilesInfo.length;
-            fileStats.textContent = `${shown} / ${total} archivos`;
-            
-            if (filteredFilesInfo.length === 0) {
-                fileListContainer.innerHTML = '<div class="no-files">🔍 Ningún archivo coincide con la búsqueda.</div>';
-                return;
-            }
-            
-            let html = '';
-            for (const info of filteredFilesInfo) {
-                const fileName = info.path.split('/').pop() || info.path;
-                const extMatch = fileName.match(/\.([^.]+)$/);
-                const ext = extMatch ? '.' + extMatch[1].toLowerCase() : '';
-                const displayExt = ext || '(sin ext)';
-                const sizeKB = (info.size / 1024).toFixed(1);
-                
-                const binaryClass = info.isText ? '' : 'binary';
-                const binaryBadge = info.isText ? '' : '<span class="ext-badge binary-tag">binario</span>';
-                
-                html += `<div class="file-item ${binaryClass}">
-                    <span style="flex:1;">${info.isText ? '📄' : '🚫'} ${info.path} <span style="opacity:0.6; font-size:0.75rem;">(${sizeKB} KB)</span></span>
-                    <span class="ext-badge">${displayExt}</span>
-                    ${binaryBadge}
-                </div>`;
-            }
-            fileListContainer.innerHTML = html;
+  function remoteConfigured() { return doclingEndpoint.value.trim().length > 0; }
+  function methodForDisplay(item) {
+    if (item.local) return { text: item.label, cls: "local" };
+    if (item.category === "remote" && remoteConfigured()) return { text: "Docling", cls: "remote" };
+    if (item.category === "remote") return { text: item.label, cls: "remote" };
+    return { text: item.label, cls: "skip" };
+  }
+
+  function renderList() {
+    const query = searchInput.value.trim().toLowerCase();
+    filteredItems = items.filter((item) => `${item.path} ${item.label} ${item.category}`.toLowerCase().includes(query));
+    fileStats.textContent = `${filteredItems.length} / ${items.length} archivos`;
+    if (!filteredItems.length) {
+      fileList.innerHTML = '<div class="empty">No hay coincidencias.</div>';
+      return;
+    }
+    fileList.innerHTML = filteredItems.map((item) => {
+      const method = methodForDisplay(item);
+      return `<div class="file-item">
+        <span aria-hidden="true">${item.icon}</span>
+        <div class="file-path">${escapeHtml(item.path)}<div class="file-meta">${formatBytes(item.size)} · ${escapeHtml(extensionOf(item.path) || "sin extensión")}</div></div>
+        <span class="badge ${method.cls}">${escapeHtml(method.text)}</span>
+      </div>`;
+    }).join("");
+    const localCount = items.filter((x) => x.local).length;
+    const remoteCount = items.filter((x) => !x.local && x.category === "remote").length;
+    const skippedCount = items.length - localCount - remoteCount;
+    binaryNote.textContent = `✅ ${localCount} extraíbles localmente · 🧠 ${remoteCount} compatibles con backend · 🚫 ${skippedCount} no compatibles`;
+  }
+
+  function limpiarCodigo(texto, extension, fileName) {
+    if (!cleanComments.checked) return normalizeText(texto);
+    const ext = extension.toLowerCase();
+    const name = fileName.toLowerCase();
+    const shebang = texto.match(/^#!.*$/m)?.[0] || "";
+
+    if ([".py", ".pyw", ".pyx"].includes(ext)) {
+      texto = texto.replace(/^\s*#.*$/gm, "");
+      texto = texto.replace(/"{3}[\s\S]*?"{3}|'{3}[\s\S]*?'{3}/g, "");
+    } else if ([".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx", ".ino", ".pde", ".java", ".kt", ".swift", ".rs", ".go", ".js", ".ts", ".tsx", ".jsx", ".php", ".cs"].includes(ext)) {
+      texto = texto.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    } else if ([".xml", ".xacro", ".urdf", ".sdf", ".world", ".launch", ".html", ".htm"].includes(ext)) {
+      texto = texto.replace(/<!--[\s\S]*?-->/g, "");
+    } else if ([".yaml", ".yml", ".sh", ".bash", ".zsh", ".toml", ".cfg", ".conf", ".ini", ".ps1", ".bat", ".cmd"].includes(ext) || name === "dockerfile" || name === "makefile") {
+      texto = texto.replace(/^(?!#!)\s*#.*$/gm, "");
+    } else if (ext === ".tex") {
+      texto = texto.replace(/(?<!\\)%.*$/gm, "");
+    }
+
+    texto = normalizeText(texto);
+    if (shebang && !texto.startsWith("#!")) texto = `${shebang}\n${texto}`;
+    return texto;
+  }
+
+  function markdownEscape(value) {
+    return String(value ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+  }
+
+  function tableElementToMarkdown(table) {
+    const rows = Array.from(table.querySelectorAll(":scope > tbody > tr, :scope > thead > tr, :scope > tr"));
+    if (!rows.length) return "";
+    const matrix = rows.map((row) => Array.from(row.children).filter((c) => /^(TD|TH)$/i.test(c.tagName)).map((c) => markdownEscape(c.textContent.trim())));
+    const width = Math.max(...matrix.map((r) => r.length), 1);
+    matrix.forEach((r) => { while (r.length < width) r.push(""); });
+    const lines = [];
+    lines.push(`| ${matrix[0].join(" | ")} |`);
+    lines.push(`| ${Array(width).fill("---").join(" | ")} |`);
+    for (const row of matrix.slice(1)) lines.push(`| ${row.join(" | ")} |`);
+    return `\n${lines.join("\n")}\n`;
+  }
+
+  function htmlToMarkdown(root) {
+    function walk(node, depth = 0) {
+      if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || "";
+      if (node.nodeType !== Node.ELEMENT_NODE) return "";
+      const tag = node.tagName.toLowerCase();
+      if (tag === "table") return tableElementToMarkdown(node);
+      const inner = Array.from(node.childNodes).map((child) => walk(child, depth + 1)).join("");
+      switch (tag) {
+        case "h1": case "h2": case "h3": case "h4": case "h5": case "h6":
+          return `\n${"#".repeat(Number(tag[1]))} ${inner.trim()}\n`;
+        case "p": return `\n${inner.trim()}\n`;
+        case "br": return "\n";
+        case "strong": case "b": return inner.trim() ? `**${inner.trim()}**` : "";
+        case "em": case "i": return inner.trim() ? `*${inner.trim()}*` : "";
+        case "u": return inner;
+        case "a": {
+          const href = node.getAttribute("href") || "";
+          const text = inner.trim() || href;
+          return /^(https?:|mailto:)/i.test(href) ? `[${text}](${href})` : text;
         }
-
-        // ----- Eventos de archivo -----
-        fileInput.addEventListener('change', async (e) => {
-            const file = fileInput.files[0];
-            if (file) {
-                fileNameDisplay.textContent = `📦 ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
-                processBtn.disabled = false;
-                currentZipFile = file;
-                await scanZipAndPreview(file);
-            } else {
-                fileNameDisplay.textContent = 'Ningún archivo seleccionado';
-                processBtn.disabled = true;
-                previewPanel.style.display = 'none';
-                currentZipFile = null;
-                allFilesInfo = [];
-            }
-        });
-
-        searchInput.addEventListener('input', filterAndRenderList);
-
-        // Drag & Drop
-        const dropzone = document.querySelector('.dropzone');
-        dropzone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropzone.style.borderColor = '#5eead4';
-        });
-        dropzone.addEventListener('dragleave', () => {
-            dropzone.style.borderColor = '#3a4556';
-        });
-        dropzone.addEventListener('drop', async (e) => {
-            e.preventDefault();
-            dropzone.style.borderColor = '#3a4556';
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                fileInput.files = files;
-                fileInput.dispatchEvent(new Event('change'));
-            }
-        });
-
-        // ----- Funciones de limpieza (solo para tipos conocidos) -----
-        function limpiarCodigo(texto, extension, fileName) {
-            const ext = extension.toLowerCase();
-            const nameLower = fileName.toLowerCase();
-            
-            const shebangMatch = texto.match(/^#!.*$/m);
-            const shebang = shebangMatch ? shebangMatch[0] + '\n' : '';
-            
-            if (ext === '.py' || ext === '.pyw' || ext === '.pyx' || nameLower.endsWith('.py')) {
-                texto = texto.replace(/^\s*#.*$/gm, '');
-                texto = texto.replace(/"{3}[\s\S]*?"{3}|'{3}[\s\S]*?'{3}/g, '');
-                texto = texto.replace(/#[^"\n]*$/gm, '');
-            }
-            else if ([".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx", ".ino", ".pde", ".java", ".kt", ".swift", ".rs", ".go", ".js", ".ts", ".tsx", ".jsx", ".php"].includes(ext)) {
-                texto = texto.replace(/\/\/.*$/gm, '');
-                texto = texto.replace(/\/\*[\s\S]*?\*\//g, '');
-            }
-            else if ([".xml", ".xacro", ".urdf", ".sdf", ".world", ".launch", ".html", ".htm"].includes(ext)) {
-                texto = texto.replace(/<!--[\s\S]*?-->/g, '');
-            }
-            else if ([".yaml", ".yml", ".sh", ".bash", ".zsh", ".toml", ".cfg", ".conf", ".ini", ".ps1", ".bat", ".cmd"].includes(ext) || 
-                     nameLower === 'dockerfile' || nameLower === 'makefile') {
-                texto = texto.replace(/^(?!#!)(\s*#.*$)/gm, '');
-            }
-            else if (ext === '.tex') {
-                texto = texto.replace(/(?<!\\)%.*$/gm, '');
-            }
-            
-            let lineas = texto.split('\n').map(l => l.trimEnd());
-            const resultado = [];
-            let prevEmpty = false;
-            for (let line of lineas) {
-                const isEmpty = line.trim() === '';
-                if (isEmpty && prevEmpty) continue;
-                resultado.push(line);
-                prevEmpty = isEmpty;
-            }
-            
-            let finalTexto = resultado.join('\n').trim();
-            if (shebang && !finalTexto.startsWith('#!')) {
-                finalTexto = shebang + finalTexto;
-            }
-            return finalTexto;
+        case "li": {
+          const parent = node.parentElement?.tagName.toLowerCase();
+          const index = parent === "ol" ? `${Array.from(node.parentElement.children).indexOf(node) + 1}.` : "-";
+          return `\n${"  ".repeat(Math.max(depth - 2, 0))}${index} ${inner.trim()}`;
         }
+        case "ul": case "ol": return `\n${inner}\n`;
+        case "img": return node.getAttribute("alt") ? `[Imagen: ${node.getAttribute("alt")}]` : "[Imagen]";
+        case "hr": return "\n---\n";
+        default: return inner;
+      }
+    }
+    return normalizeText(walk(root));
+  }
 
-        function buildTreeString(paths) {
-            const tree = {};
-            for (const p of paths) {
-                const parts = p.split('/');
-                let current = tree;
-                for (let i = 0; i < parts.length; i++) {
-                    const part = parts[i];
-                    if (!current[part]) current[part] = {};
-                    current = current[part];
-                }
-            }
-            
-            function renderTree(node, prefix = '', isLast = true, root = true) {
-                let lines = [];
-                const entries = Object.keys(node).sort();
-                
-                if (root) {
-                    lines.push('src/');
-                    prefix = '';
-                }
-                
-                for (let i = 0; i < entries.length; i++) {
-                    const entry = entries[i];
-                    const isLastEntry = (i === entries.length - 1);
-                    const children = node[entry];
-                    const hasChildren = Object.keys(children).length > 0;
-                    
-                    const connector = isLastEntry ? '└── ' : '├── ';
-                    const linePrefix = root ? '' : prefix;
-                    
-                    if (hasChildren) {
-                        lines.push(linePrefix + connector + entry + '/');
-                        const newPrefix = prefix + (isLastEntry ? '    ' : '│   ');
-                        lines.push(...renderTree(children, newPrefix, isLastEntry, false));
-                    } else {
-                        lines.push(linePrefix + connector + entry);
-                    }
-                }
-                return lines;
-            }
-            
-            return renderTree(tree, '', true, true).join('\n');
-        }
+  async function extractWord(bytes) {
+    if (!window.mammoth) throw new Error("Mammoth.js no pudo cargarse.");
+    const result = await mammoth.convertToHtml(
+      { arrayBuffer: exactArrayBuffer(bytes) },
+      { includeDefaultStyleMap: true, ignoreEmptyParagraphs: false }
+    );
+    const doc = new DOMParser().parseFromString(`<body>${result.value}</body>`, "text/html");
+    const warnings = result.messages?.map((m) => m.message).filter(Boolean) || [];
+    return { content: htmlToMarkdown(doc.body), method: "mammoth-local", warnings };
+  }
 
-        async function processZip() {
-            const file = currentZipFile;
-            if (!file) return;
-            
-            statusDiv.innerHTML = `<span style="color:#93c5fd;">🔍 Procesando archivos de texto...</span>`;
-            processBtn.disabled = true;
-            
-            try {
-                const zip = new JSZip();
-                const contents = await zip.loadAsync(file);
-                
-                const allPaths = [];
-                const fileContents = [];
-                let fileCount = 0;
-                
-                // Usar textFilePaths que ya tenemos (los archivos de texto)
-                for (const path of textFilePaths) {
-                    const zipEntry = contents.files[path];
-                    if (!zipEntry || zipEntry.dir) continue;
-                    
-                    allPaths.push(path);
-                    
-                    try {
-                        const text = await zipEntry.async("string");
-                        const fileName = path.split('/').pop() || '';
-                        const extDot = fileName.lastIndexOf('.');
-                        const extension = extDot >= 0 ? fileName.substring(extDot).toLowerCase() : '';
-                        
-                        const cleaned = limpiarCodigo(text, extension, fileName);
-                        
-                        if (cleaned.trim().length > 0) {
-                            fileContents.push({
-                                path: path,
-                                ext: extension || '.txt',
-                                content: cleaned
-                            });
-                            fileCount++;
-                        }
-                    } catch (e) {
-                        console.warn(`Error procesando ${path}`, e);
-                    }
-                }
-                
-                // Agregar también archivos binarios al árbol (pero no contenido)
-                for (const info of allFilesInfo) {
-                    if (!info.isText && !allPaths.includes(info.path)) {
-                        allPaths.push(info.path);
-                    }
-                }
-                allPaths.sort();
-                
-                const treeVisual = buildTreeString(allPaths);
-                
-                let codeBlock = "<documentos_codigo>\n";
-                for (let item of fileContents) {
-                    codeBlock += `  <archivo ruta="${item.path}" tipo="${item.ext}">\n`;
-                    codeBlock += item.content;
-                    codeBlock += `\n  </archivo>\n`;
-                }
-                codeBlock += "</documentos_codigo>";
-                
-                const finalOutput = `<estructura_proyecto>\n${treeVisual}\n</estructura_proyecto>\n\n${codeBlock}`;
-                
-                downloadFile(finalOutput, `code2text_${file.name.replace(/\.zip$/i,'')}_${new Date().toISOString().slice(0,10)}.txt`);
-                
-                statusDiv.innerHTML = `
-                    <span class="success-badge">✅ ¡Completado!</span><br>
-                    <span>📁 Archivos en árbol: ${allPaths.length}</span><br>
-                    <span>📄 Archivos de texto procesados: ${fileCount}</span><br>
-                    <span>📥 Descarga iniciada automáticamente.</span>
-                `;
-                
-            } catch (err) {
-                console.error(err);
-                statusDiv.innerHTML = `<span class="error">❌ Error crítico: ${err.message}</span>`;
-            } finally {
-                processBtn.disabled = false;
-            }
-        }
-        
-        function downloadFile(content, fileName) {
-            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }
-        
-        processBtn.addEventListener('click', processZip);
+  function sheetToMarkdown(ws, name) {
+    const ref = ws["!ref"];
+    if (!ref) return `## Hoja: ${name}\n\n*(Hoja vacía)*`;
+    const range = XLSX.utils.decode_range(ref);
+    const rows = range.e.r - range.s.r + 1;
+    const cols = range.e.c - range.s.c + 1;
+    const maxCols = Math.min(cols, 500);
+    const maxRows = Math.min(rows, Math.max(1, Math.floor(MAX_EXCEL_CELLS_PER_SHEET / maxCols)));
+    const matrix = [];
+    for (let r = range.s.r; r <= range.s.r + maxRows - 1; r++) {
+      const row = [];
+      for (let c = range.s.c; c <= range.s.c + maxCols - 1; c++) {
+        const address = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[address];
+        if (!cell) { row.push(""); continue; }
+        let display = XLSX.utils.format_cell(cell);
+        if (cell.f) display = display ? `${display} [fórmula: =${cell.f}]` : `=${cell.f}`;
+        row.push(markdownEscape(display));
+      }
+      matrix.push(row);
+    }
+    while (matrix.length && matrix[matrix.length - 1].every((x) => x === "")) matrix.pop();
+    if (!matrix.length) return `## Hoja: ${name}\n\n*(Hoja vacía)*`;
+    const lines = [`## Hoja: ${name}`, "", `| ${matrix[0].join(" | ")} |`, `| ${Array(maxCols).fill("---").join(" | ")} |`];
+    for (const row of matrix.slice(1)) lines.push(`| ${row.join(" | ")} |`);
+    if (maxRows < rows || maxCols < cols) {
+      lines.push("", `> Hoja truncada para proteger la memoria: ${maxRows}/${rows} filas y ${maxCols}/${cols} columnas.`);
+    }
+    return lines.join("\n");
+  }
 
-        // ----- Panel informativo de extensiones (solo visual) -----
-        function renderExampleChips(filterText = '') {
-            const query = filterText.trim().toLowerCase();
-            let filtered = EXAMPLE_EXTENSIONS;
-            if (query !== '') {
-                filtered = EXAMPLE_EXTENSIONS.filter(ext => ext.toLowerCase().includes(query));
-            }
-            
-            formatsStats.textContent = query ? `${filtered.length} ejemplos` : 'Extensiones comunes';
-            
-            if (filtered.length === 0) {
-                chipsContainer.innerHTML = '<div class="no-files" style="width:100%;">Sin coincidencias</div>';
-                return;
-            }
-            
-            let html = '';
-            for (const ext of filtered) {
-                const isSpecial = ext.startsWith('.') ? false : true;
-                const chipClass = isSpecial ? 'chip special' : 'chip';
-                html += `<span class="${chipClass}">${ext}</span>`;
-            }
-            chipsContainer.innerHTML = html;
-        }
+  async function extractSpreadsheet(bytes) {
+    if (!window.XLSX) throw new Error("SheetJS no pudo cargarse.");
+    const workbook = XLSX.read(bytes, { type: "array", cellFormula: true, cellDates: true, dense: false });
+    const sections = workbook.SheetNames.map((name) => sheetToMarkdown(workbook.Sheets[name], name));
+    return { content: sections.join("\n\n"), method: "sheetjs-local", warnings: [] };
+  }
 
-        renderExampleChips('');
-        formatsSearchInput.addEventListener('input', (e) => renderExampleChips(e.target.value));
-        
-    })();
+  function extractPptShape(shape) {
+    const table = nodesByLocalName(shape, "tbl")[0];
+    if (table) {
+      const rows = nodesByLocalName(table, "tr").map((tr) => nodesByLocalName(tr, "tc").map((tc) => markdownEscape(nodesByLocalName(tc, "t").map((n) => n.textContent).join(" ").trim())));
+      if (!rows.length) return "";
+      const width = Math.max(...rows.map((r) => r.length));
+      rows.forEach((r) => { while (r.length < width) r.push(""); });
+      return [`| ${rows[0].join(" | ")} |`, `| ${Array(width).fill("---").join(" | ")} |`, ...rows.slice(1).map((r) => `| ${r.join(" | ")} |`)].join("\n");
+    }
+    const text = nodesByLocalName(shape, "t").map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
+    if (!text) return "";
+    const placeholder = nodesByLocalName(shape, "ph")[0];
+    const type = attrByLocalName(placeholder, "type");
+    return ["title", "ctrTitle", "subTitle"].includes(type) ? `# ${text}` : text;
+  }
+
+  async function extractPowerPoint(bytes) {
+    const zip = await JSZip.loadAsync(bytes);
+    const slidePaths = Object.keys(zip.files).filter((p) => /^ppt\/slides\/slide\d+\.xml$/i.test(p)).sort(naturalPathSort);
+    const notePaths = Object.keys(zip.files).filter((p) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/i.test(p)).sort(naturalPathSort);
+    const sections = [];
+    for (let i = 0; i < slidePaths.length; i++) {
+      const xml = await zip.files[slidePaths[i]].async("string");
+      const doc = parseXml(xml, slidePaths[i]);
+      const body = nodesByLocalName(doc, "spTree")[0] || doc.documentElement;
+      const directElements = Array.from(body.children).filter((n) => ["sp", "graphicFrame", "cxnSp", "grpSp"].includes(n.localName));
+      const blocks = directElements.map(extractPptShape).filter(Boolean);
+      if (!blocks.length) {
+        const fallback = nodesByLocalName(doc, "t").map((n) => n.textContent).join(" ").trim();
+        if (fallback) blocks.push(fallback);
+      }
+      let section = `## Diapositiva ${i + 1}\n\n${blocks.join("\n\n") || "*(Sin texto extraíble)*"}`;
+      if (notePaths[i]) {
+        const noteDoc = parseXml(await zip.files[notePaths[i]].async("string"), notePaths[i]);
+        const notes = nodesByLocalName(noteDoc, "t").map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
+        if (notes) section += `\n\n### Notas del presentador\n\n${notes}`;
+      }
+      sections.push(section);
+    }
+    return { content: sections.join("\n\n---\n\n"), method: "ooxml-powerpoint-local", warnings: [] };
+  }
+
+  async function extractVisio(bytes) {
+    const zip = await JSZip.loadAsync(bytes);
+    const paths = Object.keys(zip.files)
+      .filter((p) => /^visio\/(pages\/page|masters\/master)\d+\.xml$/i.test(p))
+      .sort(naturalPathSort);
+    const sections = [];
+    for (let i = 0; i < paths.length; i++) {
+      const path = paths[i];
+      const doc = parseXml(await zip.files[path].async("string"), path);
+      const values = nodesByLocalName(doc, "Text").map((n) => n.textContent.replace(/\s+/g, " ").trim()).filter(Boolean);
+      const kind = path.includes("/masters/") ? "Maestro" : "Página";
+      sections.push(`## ${kind} ${i + 1}\n\n${values.length ? values.map((v) => `- ${v}`).join("\n") : "*(Sin texto extraíble)*"}`);
+    }
+    return { content: sections.join("\n\n---\n\n"), method: "ooxml-visio-local", warnings: paths.length ? [] : ["No se encontraron páginas ni maestros Visio reconocibles."] };
+  }
+
+  function naturalPathSort(a, b) {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  }
+
+  function pdfPageText(items) {
+    const rows = [];
+    for (const item of items) {
+      if (!item.str?.trim()) continue;
+      const x = item.transform?.[4] ?? 0;
+      const y = item.transform?.[5] ?? 0;
+      let row = rows.find((r) => Math.abs(r.y - y) <= 2.5);
+      if (!row) { row = { y, parts: [] }; rows.push(row); }
+      row.parts.push({ x, text: item.str });
+    }
+    rows.sort((a, b) => b.y - a.y);
+    return rows.map((row) => row.parts.sort((a, b) => a.x - b.x).map((p) => p.text).join(" ").replace(/\s+/g, " ").trim()).filter(Boolean).join("\n");
+  }
+
+  async function extractPdf(bytes) {
+    if (!window.pdfjsLib) throw new Error("PDF.js no pudo cargarse.");
+    const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() });
+    const pdf = await loadingTask.promise;
+    const metadata = await pdf.getMetadata().catch(() => null);
+    const sections = [];
+    const info = metadata?.info || {};
+    if (info.Title || info.Author || info.Subject) {
+      sections.push(["# Metadatos", info.Title && `- Título: ${info.Title}`, info.Author && `- Autor: ${info.Author}`, info.Subject && `- Asunto: ${info.Subject}`].filter(Boolean).join("\n"));
+    }
+    let totalChars = 0;
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const text = pdfPageText(textContent.items);
+      totalChars += text.length;
+      sections.push(`## Página ${pageNumber}\n\n${text || "*(Sin capa de texto)*"}`);
+    }
+    return {
+      content: sections.join("\n\n---\n\n"),
+      method: "pdfjs-local",
+      warnings: totalChars < 20 ? ["El PDF no contiene una capa de texto útil. Se recomienda usar el backend Docling con OCR."] : [],
+      needsRemoteFallback: totalChars < 20
+    };
+  }
+
+  function decodeRtf(bytes) {
+    let text = decoderFor(bytes).decode(bytes);
+    text = text.replace(/\\u(-?\d+)\??/g, (_, n) => String.fromCharCode(Number(n) < 0 ? Number(n) + 65536 : Number(n)));
+    text = text.replace(/\\'([0-9a-fA-F]{2})/g, (_, hex) => new TextDecoder("windows-1252").decode(Uint8Array.of(parseInt(hex, 16))));
+    text = text.replace(/\{\\\*[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, "");
+    text = text.replace(/\\par[d]?\b/g, "\n").replace(/\\line\b/g, "\n").replace(/\\tab\b/g, "\t");
+    text = text.replace(/\\[a-zA-Z]+-?\d* ?/g, "").replace(/[{}]/g, "");
+    return normalizeText(text);
+  }
+
+  async function extractText(bytes, item) {
+    const text = decoderFor(bytes).decode(bytes);
+    return { content: limpiarCodigo(text, extensionOf(item.path), item.originalName), method: "text-decoder-local", warnings: [] };
+  }
+
+  async function extractRemote(bytes, item) {
+    const base = doclingEndpoint.value.trim().replace(/\/$/, "");
+    if (!base) throw new Error("No se configuró un backend Docling.");
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: "application/octet-stream" }), item.originalName);
+    const response = await fetch(`${base}/api/extract`, { method: "POST", body: form });
+    let payload = null;
+    try { payload = await response.json(); } catch { /* ignore */ }
+    if (!response.ok) throw new Error(payload?.detail || payload?.error || `Docling respondió ${response.status}`);
+    return { content: payload.markdown || payload.text || "", method: payload.method || "docling-backend", warnings: payload.warnings || [] };
+  }
+
+  async function extractItem(item) {
+    const bytes = item.cache || await item.getBytes();
+    let result;
+    switch (item.category) {
+      case "word": result = await extractWord(bytes); break;
+      case "sheet": result = await extractSpreadsheet(bytes); break;
+      case "slides": result = await extractPowerPoint(bytes); break;
+      case "visio": result = await extractVisio(bytes); break;
+      case "pdf": result = await extractPdf(bytes); break;
+      case "rtf": result = { content: decodeRtf(bytes), method: "rtf-local", warnings: [] }; break;
+      case "text": result = await extractText(bytes, item); break;
+      case "remote": result = await extractRemote(bytes, item); break;
+      default: throw new Error("Formato no compatible");
+    }
+    if (result.needsRemoteFallback && remoteConfigured()) {
+      try {
+        const remote = await extractRemote(bytes, item);
+        remote.warnings = [...(result.warnings || []), "Se utilizó Docling como respaldo porque PDF.js no encontró texto suficiente.", ...(remote.warnings || [])];
+        return remote;
+      } catch (error) {
+        result.warnings = [...(result.warnings || []), `Falló el respaldo Docling: ${error.message}`];
+      }
+    }
+    return result;
+  }
+
+  function buildTreeString(paths) {
+    const root = {};
+    for (const path of paths) {
+      let node = root;
+      for (const part of path.split("/").filter(Boolean)) node = node[part] ||= {};
+    }
+    const lines = ["entrada/"];
+    function render(node, prefix = "") {
+      const names = Object.keys(node).sort(naturalPathSort);
+      names.forEach((name, index) => {
+        const last = index === names.length - 1;
+        const children = node[name];
+        const directory = Object.keys(children).length > 0;
+        lines.push(`${prefix}${last ? "└── " : "├── "}${name}${directory ? "/" : ""}`);
+        if (directory) render(children, `${prefix}${last ? "    " : "│   "}`);
+      });
+    }
+    render(root);
+    return lines.join("\n");
+  }
+
+  function buildOutput(extracted, omitted, warnings) {
+    const tree = buildTreeString(items.map((x) => x.path));
+    let body = `<estructura_proyecto>\n${tree}\n</estructura_proyecto>\n\n<documentos_codigo version="2">\n`;
+    for (const item of extracted) {
+      body += `  <archivo ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || ".txt")}" metodo="${escapeAttr(item.method)}"><![CDATA[\n${cdata(item.content)}\n]]></archivo>\n`;
+    }
+    body += `</documentos_codigo>`;
+    if (includeOmitted.checked && omitted.length) {
+      body += `\n\n<archivos_omitidos>\n`;
+      for (const item of omitted) body += `  <archivo ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || "desconocido")}" tamano_bytes="${item.size}" motivo="${escapeAttr(item.reason)}" />\n`;
+      body += `</archivos_omitidos>`;
+    }
+    if (warnings.length) {
+      body += `\n\n<advertencias>\n${warnings.map((w) => `  <advertencia archivo="${escapeAttr(w.path)}"><![CDATA[${cdata(w.message)}]]></advertencia>`).join("\n")}\n</advertencias>`;
+    }
+    return body;
+  }
+
+  function downloadText(content, filename) {
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function processAll() {
+    if (busy || !items.length) return;
+    busy = true;
+    processBtn.disabled = true;
+    const extracted = [];
+    const omitted = [];
+    const warnings = [];
+
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        setProgress(i, items.length);
+        setStatus(`⚙️ Procesando ${i + 1}/${items.length}\n${escapeHtml(item.path)}`);
+        const canRemote = item.category === "remote" && remoteConfigured();
+        if (!item.local && !canRemote) {
+          omitted.push({ ...item, reason: item.category === "remote" ? "Requiere backend Docling" : item.label });
+          continue;
+        }
+        try {
+          const result = await extractItem(item);
+          const content = normalizeText(result.content);
+          if (content) extracted.push({ path: item.path, method: result.method, content });
+          else omitted.push({ ...item, reason: "No se encontró contenido textual" });
+          for (const warning of result.warnings || []) warnings.push({ path: item.path, message: warning });
+        } catch (error) {
+          console.error(`Error en ${item.path}`, error);
+          omitted.push({ ...item, reason: error.message });
+          warnings.push({ path: item.path, message: `No se pudo extraer: ${error.message}` });
+        }
+        await microYield(i);
+      }
+      setProgress(items.length, items.length);
+      const output = buildOutput(extracted, omitted, warnings);
+      const rootName = selectedFiles.length === 1 ? stripExt(selectedFiles[0].name) : "seleccion_multiple";
+      const filename = `code2text_${rootName}_${new Date().toISOString().slice(0, 10)}.txt`;
+      downloadText(output, filename);
+      setStatus(`<span class="ok">✅ Extracción completada</span>\n📄 Contenido extraído: ${extracted.length}\n🚫 Omitidos: ${omitted.length}\n⚠️ Advertencias: ${warnings.length}\n📥 Archivo generado: ${escapeHtml(filename)}`);
+    } catch (error) {
+      console.error(error);
+      setStatus(`<span class="error">❌ Error crítico: ${escapeHtml(error.message)}</span>`);
+    } finally {
+      busy = false;
+      processBtn.disabled = false;
+      setTimeout(hideProgress, 900);
+    }
+  }
+
+  async function microYield(index) {
+    if (index % 4 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  async function testBackend() {
+    const base = doclingEndpoint.value.trim().replace(/\/$/, "");
+    if (!base) {
+      setStatus('<span class="warn">⚠️ Escribe primero la dirección del backend.</span>');
+      return;
+    }
+    testBackendBtn.disabled = true;
+    try {
+      const response = await fetch(`${base}/health`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json().catch(() => ({}));
+      setStatus(`<span class="ok">✅ Backend disponible</span>\n${escapeHtml(data.service || "Docling backend")} ${escapeHtml(data.version || "")}`);
+    } catch (error) {
+      setStatus(`<span class="error">❌ No se pudo conectar al backend: ${escapeHtml(error.message)}</span>`);
+    } finally {
+      testBackendBtn.disabled = false;
+      renderList();
+    }
+  }
+
+  function handleFiles(fileListValue) {
+    selectedFiles = Array.from(fileListValue || []);
+    if (!selectedFiles.length) {
+      selectedSummary.textContent = "Ningún archivo seleccionado.";
+      previewPanel.hidden = true;
+      processBtn.disabled = true;
+      items = [];
+      return;
+    }
+    selectedSummary.textContent = `${selectedFiles.length} entrada(s) seleccionada(s).`;
+    scanFiles(selectedFiles);
+  }
+
+  fileInput.addEventListener("change", () => handleFiles(fileInput.files));
+  searchInput.addEventListener("input", renderList);
+  doclingEndpoint.addEventListener("input", renderList);
+  processBtn.addEventListener("click", processAll);
+  testBackendBtn.addEventListener("click", testBackend);
+
+  ["dragenter", "dragover"].forEach((name) => dropzone.addEventListener(name, (event) => {
+    event.preventDefault();
+    dropzone.classList.add("dragging");
+  }));
+  ["dragleave", "drop"].forEach((name) => dropzone.addEventListener(name, (event) => {
+    event.preventDefault();
+    dropzone.classList.remove("dragging");
+  }));
+  dropzone.addEventListener("drop", (event) => handleFiles(event.dataTransfer.files));
+})();
 </script>
 </body>
 </html>

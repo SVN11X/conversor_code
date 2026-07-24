@@ -18,8 +18,9 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise RuntimeError("Docling no está instalado. Ejecuta pip install docling.") from exc
 
-APP_VERSION = "1.0.0"
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(150 * 1024 * 1024)))
+APP_VERSION = "2.0.0"
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
+UPLOAD_CHUNK_BYTES = int(os.getenv("UPLOAD_CHUNK_BYTES", str(8 * 1024 * 1024)))
 CONVERSION_TIMEOUT_SECONDS = int(os.getenv("CONVERSION_TIMEOUT_SECONDS", "240"))
 ALLOWED_ORIGINS = [
     item.strip()
@@ -61,6 +62,31 @@ def safe_filename(filename: str | None) -> str:
     name = re.sub(r"[^A-Za-z0-9._()\- áéíóúÁÉÍÓÚñÑ]", "_", name)
     return name[:180] or "documento.bin"
 
+
+
+async def save_upload_streaming(upload: UploadFile, destination: Path) -> int:
+    """Guarda la subida por bloques sin duplicar el archivo completo en RAM."""
+    total = 0
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with destination.open("wb") as output:
+            while True:
+                chunk = await upload.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if MAX_UPLOAD_BYTES > 0 and total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"El archivo supera el límite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+                    )
+                output.write(chunk)
+    finally:
+        await upload.close()
+
+    if total == 0:
+        raise HTTPException(status_code=400, detail="El archivo está vacío.")
+    return total
 
 def get_converter() -> DocumentConverter:
     global _converter
@@ -150,22 +176,13 @@ def health() -> dict[str, str]:
 @app.post("/api/extract")
 async def extract(file: UploadFile = File(...)) -> dict[str, object]:
     filename = safe_filename(file.filename)
-    data = await file.read(MAX_UPLOAD_BYTES + 1)
-    await file.close()
 
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"El archivo supera el límite de {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
-        )
-    if not data:
-        raise HTTPException(status_code=400, detail="El archivo está vacío.")
+    with tempfile.TemporaryDirectory(prefix="code2text_") as temp:
+        temp_dir = Path(temp)
+        source = temp_dir / filename
+        size = await save_upload_streaming(file, source)
 
-    async with _conversion_lock:
-        with tempfile.TemporaryDirectory(prefix="code2text_") as temp:
-            temp_dir = Path(temp)
-            source = temp_dir / filename
-            source.write_bytes(data)
+        async with _conversion_lock:
             converted = convert_legacy_with_libreoffice(source, temp_dir / "converted")
             method = "docling"
             warnings: list[str] = []
@@ -178,6 +195,7 @@ async def extract(file: UploadFile = File(...)) -> dict[str, object]:
 
     return {
         "filename": filename,
+        "size_bytes": size,
         "markdown": markdown,
         "method": method,
         "warnings": warnings,

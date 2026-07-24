@@ -1,198 +1,197 @@
-# 🧠 Code2Text Universal
+# 🧠 Code2Text Universal Streaming
 
-Convierte proyectos comprimidos y documentos en un único archivo de texto estructurado, pensado para proporcionar contexto a modelos de lenguaje.
+Convierte proyectos comprimidos y documentos en un único archivo de texto estructurado para modelos de lenguaje. Esta edición está preparada para ZIP de gran tamaño: el ZIP exterior se lee por rangos, cada entrada se descomprime una sola vez y el consolidado se escribe progresivamente al disco.
 
-Esta versión amplía el proyecto original para que los archivos que antes se marcaban simplemente como **binarios** puedan pasar por extractores especializados.
+## Cambio principal de esta versión
 
-## Qué puede extraer
+La versión anterior usaba JSZip para abrir el ZIP exterior, descomprimía archivos durante el escaneo y construía todo el resultado en memoria. Eso impedía trabajar de forma confiable con ZIP de 1 GB o más.
+
+La versión Streaming utiliza:
+
+- **zip.js** para leer ZIP y ZIP64 sin cargar el archivo completo en RAM.
+- `getEntriesGenerator()` para recorrer el índice de forma incremental.
+- Descompresión de **una entrada por vez**.
+- Escritura directa mediante **File System Access API** en Edge y Chrome.
+- Procesamiento por streaming para archivos de texto de 16 MB o más.
+- Vista previa limitada a 2.000 filas, aunque todos los archivos se procesan.
+- Backend Docling con subida por bloques, sin `await file.read()` sobre el archivo completo.
+
+No existe un límite fijo para el tamaño total del ZIP. El límite real depende del sistema de archivos, espacio libre, navegador y cantidad de entradas. Los documentos complejos individuales —Word, Excel, PowerPoint, Visio y PDF— sí requieren memoria durante su extracción local y cuentan con una protección calculada según el límite de memoria del navegador.
+
+## Formatos
 
 | Familia | Formatos principales | Ejecución | Contenido recuperado |
 |---|---|---|---|
-| Código y texto | TXT, MD, JSON, XML, YAML, código fuente y configuraciones | Navegador | Texto completo y limpieza opcional de comentarios |
-| Microsoft Word | DOCX, DOCM, DOTX, DOTM | Navegador | Títulos, párrafos, listas, tablas, enlaces, notas y texto de cuadros compatibles |
+| Código y texto | TXT, MD, JSON, XML, YAML, CSV y lenguajes de programación | Navegador | Texto completo; archivos grandes se copian por streaming |
+| Microsoft Word | DOCX, DOCM, DOTX, DOTM | Navegador | Títulos, párrafos, listas, tablas y enlaces compatibles |
 | Microsoft Excel | XLSX, XLS, XLSB, XLSM, XLTX, XLTM, ODS | Navegador | Hojas, valores visibles y fórmulas |
-| Microsoft PowerPoint | PPTX, PPTM, PPSX, PPSM, POTX, POTM | Navegador | Texto ordenado por diapositiva, tablas y notas del presentador |
-| Microsoft Visio | VSDX, VSDM, VSSX, VSTX y variantes | Navegador | Textos contenidos en formas y páginas |
-| PDF | PDF con capa de texto | Navegador | Metadatos básicos y contenido separado por página |
+| Microsoft PowerPoint | PPTX, PPTM, PPSX, PPSM, POTX, POTM | Navegador | Texto por diapositiva, tablas y notas |
+| Microsoft Visio | VSDX, VSDM, VSSX, VSTX y variantes | Navegador | Textos de páginas, formas y maestros |
+| PDF | PDF con capa de texto | Navegador | Metadatos y contenido por página |
 | RTF | RTF | Navegador | Texto normalizado |
-| OCR y formatos complejos | PDF escaneado, imágenes, audio, video, correo y otros formatos compatibles con Docling | Backend opcional | Markdown producido por Docling |
-| Microsoft Office antiguo | DOC, PPT y otros formatos antiguos convertibles | Backend opcional | Conversión temporal con LibreOffice y extracción posterior con Docling |
+| OCR y formatos complejos | PDF escaneado, imágenes y formatos compatibles con Docling | Backend opcional | Markdown producido por Docling |
+| Office antiguo | DOC, PPT y otros convertibles | Backend opcional | Conversión con LibreOffice y extracción con Docling |
 
-> **Importante:** DOCX, XLSX, PPTX y VSDX son contenedores comprimidos con XML. Aunque el navegador los detecta como binarios, no necesitan enviarse a un servidor para extraer su contenido.
+## Uso recomendado para ZIP grandes
 
-## Resultado generado
+1. Publica el repositorio mediante GitHub Pages o ejecútalo en `localhost`.
+2. Abre la herramienta en **Microsoft Edge o Google Chrome de escritorio**.
+3. Selecciona el ZIP.
+4. Espera a que se lea el índice. En esta etapa no se descomprime todo el ZIP.
+5. Pulsa **Procesar y guardar**.
+6. Selecciona inmediatamente dónde guardar el consolidado.
+7. Mantén espacio libre suficiente para el TXT resultante.
 
-El archivo descargado conserva la estructura compatible con Code2Text:
+La selección del destino al comienzo es intencional: permite escribir el resultado directamente al disco y evita crear un `Blob` gigante al final.
 
-```xml
-<estructura_proyecto>
-entrada/
-├── src/
-│   └── app.js
-└── documentos/
-    └── informe.docx
-</estructura_proyecto>
-
-<documentos_codigo version="2">
-  <archivo ruta="src/app.js" tipo=".js" metodo="text-decoder-local"><![CDATA[
-  // contenido
-  ]]></archivo>
-  <archivo ruta="documentos/informe.docx" tipo=".docx" metodo="mammoth-local"><![CDATA[
-  # Título del informe
-  ...
-  ]]></archivo>
-</documentos_codigo>
-```
-
-También puede incluir:
-
-- `<archivos_omitidos>` con la razón de cada omisión.
-- `<advertencias>` para PDF sin texto, hojas truncadas, conversiones antiguas o errores parciales.
-- El atributo `metodo`, que permite saber si se usó Mammoth, SheetJS, PDF.js, OOXML local o Docling.
-
-## Uso sin instalar nada
-
-1. Publica el contenido del repositorio mediante **GitHub Pages**.
-2. Abre la página desde el navegador.
-3. Arrastra un ZIP o selecciona uno o varios documentos.
-4. Revisa la vista previa y pulsa **Procesar y descargar**.
-
-Los archivos Word, Excel, PowerPoint, PDF con texto, Visio, RTF y archivos de código se procesan en el equipo del usuario.
-
-### Probar localmente la página
-
-Desde la carpeta del proyecto:
+### Ejecutar localmente
 
 ```bash
 python -m http.server 8080
 ```
 
-Después abre:
+Abre:
 
 ```text
 http://localhost:8080
 ```
 
-Se recomienda usar un servidor local en vez de abrir `index.html` con `file://`, especialmente para PDF.js.
+No se recomienda abrir `index.html` directamente con `file://`, porque algunas API de navegador y trabajadores pueden quedar restringidos.
 
-## Publicar en GitHub Pages
+## Formato del resultado
 
-1. Sube `index.html`, `README.md` y las demás carpetas al repositorio.
-2. Abre **Settings → Pages**.
-3. Selecciona **Deploy from a branch**.
-4. Elige la rama principal y la carpeta `/ (root)`.
-5. Guarda los cambios.
+La salida usa un formato XML-like apto para lectura incremental:
 
-El backend no se ejecuta en GitHub Pages. La extracción local seguirá funcionando sin él.
+```xml
+<estructura_proyecto version="3" modo="lista-streaming">
+  <entrada ruta="src/app.js" tipo=".js" tamano_bytes="1250" origen="zip" />
+  <entrada ruta="documentos/informe.docx" tipo=".docx" tamano_bytes="87000" origen="zip" />
+</estructura_proyecto>
+
+<documentos_codigo version="3" modo="streaming">
+  <archivo ruta="src/app.js" tipo=".js" metodo="text-decoder-local" estado="extraido"><![CDATA[
+  // contenido
+  ]]></archivo>
+
+  <archivo ruta="documentos/informe.docx" tipo=".docx" metodo="mammoth-local" estado="extraido"><![CDATA[
+  # Informe
+  ]]></archivo>
+
+  <archivo ruta="binario.dat" tipo=".dat" estado="omitido" tamano_bytes="100" motivo="Binario no compatible" />
+  <advertencia archivo="documentos/escaneado.pdf"><![CDATA[Se recomienda OCR.]]></advertencia>
+</documentos_codigo>
+```
+
+La estructura se escribe como lista en vez de árbol para no construir en memoria una representación enorme cuando el ZIP contiene cientos de miles de archivos.
+
+## Cómo se controla la memoria
+
+### ZIP exterior
+
+- Se mantiene una referencia al archivo seleccionado.
+- zip.js lee el directorio central y los rangos necesarios del `Blob`.
+- El escaneo no extrae el contenido de las entradas.
+- Cada entrada se libera después de procesarla.
+
+### Texto grande
+
+Los archivos de texto de 16 MB o más se decodifican por bloques y se escriben directamente al consolidado. En ese modo se omite la limpieza heurística de comentarios, porque esa función necesita disponer del archivo completo.
+
+### Word, Excel, PowerPoint, Visio y PDF
+
+Las bibliotecas utilizadas necesitan abrir el documento individual. Por eso se calcula una protección local entre aproximadamente 160 MB y 512 MB, según el límite de heap informado por Chromium. Esto no limita el tamaño total del ZIP: solo evita que un único documento gigante cierre la pestaña.
+
+Cuando se configura Docling, un documento que supera la protección local se deriva al backend.
+
+### Navegadores sin File System Access API
+
+La herramienta conserva un modo compatible basado en `Blob`, limitado a 256 MB de salida para evitar agotar la RAM. Para consolidados grandes, utiliza Edge o Chrome en HTTPS o `localhost`.
 
 ## Backend Docling opcional
 
-El backend se utiliza únicamente para:
+El backend se utiliza para OCR, formatos antiguos y documentos demasiado grandes para los extractores locales.
 
-- OCR de PDF escaneado.
-- Imágenes.
-- Formatos que no poseen extractor local.
-- DOC y PPT antiguos, que se convierten primero mediante LibreOffice.
-- Extracción avanzada cuando PDF.js no encuentra una capa de texto útil.
-
-### Requisitos recomendados
-
-- Docker Desktop o Docker Engine con Compose.
-- Al menos 8 GB de RAM disponibles; 12 GB o más mejora el procesamiento de PDF complejos.
-- Espacio suficiente para la imagen, modelos y caché de Docling.
-
-### Iniciar el backend
+### Iniciar
 
 ```bash
 docker compose up --build
 ```
 
-Comprueba su estado en:
-
-```text
-http://localhost:8000/health
-```
-
-En la página, abre **Extracción avanzada con Docling** e introduce:
+Después configura en la página:
 
 ```text
 http://localhost:8000
 ```
 
-Luego pulsa **Probar conexión**.
+### Subidas grandes
 
-### GitHub Pages y HTTPS
-
-Una página publicada por GitHub Pages usa HTTPS. Algunos navegadores pueden bloquear solicitudes hacia un backend HTTP externo por contenido mixto. Para producción, publica el backend detrás de HTTPS. Para pruebas locales, abre la página con `python -m http.server 8080` y usa el backend HTTP de Docker.
-
-### Configuración del backend
-
-Variables disponibles en `docker-compose.yml`:
-
-| Variable | Uso |
-|---|---|
-| `ALLOWED_ORIGINS` | Orígenes permitidos por CORS. En producción conviene indicar la URL exacta de GitHub Pages. |
-| `MAX_UPLOAD_BYTES` | Tamaño máximo por archivo enviado al backend. |
-| `CONVERSION_TIMEOUT_SECONDS` | Tiempo máximo para conversiones de LibreOffice. |
-
-Ejemplo de origen restringido:
+El backend guarda cada subida en un archivo temporal mediante bloques de 8 MB. El valor predeterminado permite hasta 2 GB por documento individual:
 
 ```yaml
 environment:
-  ALLOWED_ORIGINS: "https://usuario.github.io"
+  MAX_UPLOAD_BYTES: "2147483648"
+  UPLOAD_CHUNK_BYTES: "8388608"
 ```
+
+`MAX_UPLOAD_BYTES=0` desactiva el límite de la aplicación, aunque todavía pueden existir límites del proxy, Docker, disco o servidor HTTP.
+
+### Requisitos
+
+- Docker Desktop o Docker Engine con Compose.
+- 8 GB de RAM como mínimo; más memoria mejora PDF y documentos complejos.
+- Espacio temporal suficiente para el archivo original, conversiones de LibreOffice y caché de Docling.
+
+## Publicar en GitHub Pages
+
+1. Sube el contenido del repositorio.
+2. Abre **Settings → Pages**.
+3. Selecciona **Deploy from a branch**.
+4. Elige la rama principal y la carpeta raíz.
+5. Guarda.
+
+GitHub Pages ejecuta únicamente el modo local. Docling debe publicarse por separado y, para una página HTTPS, también debe exponerse mediante HTTPS.
 
 ## Arquitectura
 
 ```text
-code2text-universal/
+code2text-universal-streaming/
 ├── index.html
 ├── README.md
+├── CHANGELOG.md
 ├── THIRD_PARTY_NOTICES.md
 ├── docker-compose.yml
-└── backend/
-    ├── app.py
-    ├── Dockerfile
-    └── requirements.txt
+├── backend/
+│   ├── app.py
+│   ├── Dockerfile
+│   └── requirements.txt
+└── tests/
+    └── validate_project.py
 ```
 
-### Modo local
+- **zip.js**: ZIP exterior, ZIP64 y descompresión incremental.
+- **JSZip**: contenedores OOXML individuales ya extraídos del ZIP exterior.
+- **Mammoth.js**: Word moderno.
+- **SheetJS**: Excel.
+- **PDF.js**: capa de texto PDF.
+- Extractores OOXML propios: PowerPoint y Visio.
+- **File System Access API**: salida progresiva al disco.
+- **Docling + LibreOffice**: modo avanzado opcional.
 
-- **JSZip** abre el proyecto ZIP y los contenedores OOXML.
-- **Mammoth.js** convierte Word moderno a HTML semántico, que luego se transforma a Markdown seguro.
-- **SheetJS** lee formatos de Excel modernos y antiguos.
-- **PDF.js** extrae la capa de texto de PDF.
-- Un extractor OOXML propio procesa PowerPoint y Visio.
+## Limitaciones
 
-### Modo avanzado
+- Un ZIP cifrado necesita contraseña y actualmente se registra como omitido.
+- Los ZIP anidados se registran, pero no se expanden automáticamente para evitar recursión y uso de disco inesperados.
+- Un documento individual muy grande puede exceder la memoria que requieren Mammoth, SheetJS, PDF.js o JSZip interno, aunque el ZIP exterior se procese eficientemente.
+- PDF.js no realiza OCR.
+- La extracción de PowerPoint y Visio recupera texto, no interpreta visualmente todas las relaciones espaciales.
+- Excel limita cada hoja a 250.000 celdas y 500 columnas en la salida.
+- La cantidad máxima práctica de entradas depende de la memoria necesaria para conservar sus metadatos. La interfaz solo renderiza 2.000 filas.
+- El backend procesa una conversión Docling a la vez para evitar sobrecargar CPU y RAM.
 
-- El navegador envía exclusivamente el archivo que necesita extracción avanzada.
-- El backend lo guarda en un directorio temporal.
-- Los formatos DOC/PPT antiguos se convierten con LibreOffice.
-- Docling produce Markdown.
-- El directorio temporal se elimina al terminar.
+## Validación
 
-## Limitaciones conocidas
+```bash
+python tests/validate_project.py
+```
 
-- PDF.js no realiza OCR. Un PDF compuesto solo por imágenes necesita el backend.
-- La extracción local de PowerPoint y Visio recupera texto y tablas, pero no interpreta visualmente diagramas, flechas, fotografías ni relaciones espaciales complejas.
-- Los archivos protegidos con contraseña no se pueden procesar localmente.
-- Los macros VBA se ignoran y nunca se ejecutan.
-- Los libros Excel extremadamente grandes se limitan a 250.000 celdas y 500 columnas por hoja para evitar bloquear el navegador; el archivo de salida registra la advertencia.
-- Publisher (`.pub`), OneNote (`.one`) y algunos `.msg` pueden no ser compatibles incluso con el backend, según la versión y estructura del archivo.
-- La limpieza de comentarios es heurística; puede desactivarse desde la interfaz cuando se requiera fidelidad absoluta del código.
-- Ninguna solución estática en GitHub Pages puede ejecutar Docling dentro de la página: Docling utiliza Python, modelos y dependencias nativas. Por eso el diseño separa el modo local del backend avanzado.
-
-## Seguridad
-
-- El modo local no sube documentos.
-- No se ejecutan macros, scripts incrustados ni enlaces.
-- Los documentos Word se convierten a una representación intermedia y no se insertan como HTML activo en la interfaz.
-- El backend debe ejecutarse en un contenedor aislado y mantenerse actualizado porque procesa archivos no confiables mediante bibliotecas complejas.
-- Antes de exponer el backend en Internet, agrega autenticación, HTTPS, límites de solicitudes y un proxy inverso.
-
-## Dependencias
-
-La página carga bibliotecas desde CDN para conservar el repositorio simple y compatible con GitHub Pages. En entornos corporativos aislados, descarga esas bibliotecas, guárdalas en una carpeta `vendor/` y reemplaza las URL de los `<script>` por rutas locales.
-
-Consulta `THIRD_PARTY_NOTICES.md` para licencias y proyectos utilizados.
+El script comprueba la sintaxis JavaScript y Python, la presencia del procesamiento incremental y que no se haya reintroducido el antiguo límite global de 150 MB.

@@ -7,6 +7,7 @@
   <title>Code2Text Universal · Document Extractor</title>
 
   <!-- Dependencias cargadas desde CDN. Para una instalación totalmente aislada, véase README.md. -->
+  <script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.31/dist/zip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/mammoth@1.12.0/mammoth.browser.min.js"></script>
@@ -126,7 +127,9 @@
     .badge.skip { border-color: #7f3d46; color: #fecaca; }
     .empty { color: var(--muted); padding: 24px; text-align: center; }
 
-    .action-row { display: flex; justify-content: center; margin-top: 18px; }
+    .action-row { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+    button.secondary { background: #3a1d24; border-color: #8b4b58; min-width: 150px; }
+    button.secondary:hover:not(:disabled) { background: #5f2732; border-color: #fca5a5; }
     #status { min-height: 86px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: "Cascadia Code", Consolas, monospace; font-size: .88rem; color: #c7d8e9; }
     #status .ok { color: var(--success); font-weight: 700; }
     #status .warn { color: var(--warning); }
@@ -212,11 +215,12 @@
   </section>
 
   <div class="action-row">
-    <button id="processBtn" class="primary" disabled>⚡ Procesar y descargar</button>
+    <button id="processBtn" class="primary" disabled>⚡ Procesar y guardar</button>
+    <button id="cancelBtn" class="secondary" disabled>Cancelar</button>
   </div>
 
   <section class="panel">
-    <div id="status">✨ Listo para comenzar.</div>
+    <div id="status">✨ Listo para comenzar. En Edge o Chrome, el resultado se escribe directamente al disco y puede superar varios GB.</div>
     <progress id="progressBar" value="0" max="100" hidden></progress>
   </section>
 
@@ -239,6 +243,15 @@
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
   }
 
+  if (window.zip?.configure) {
+    window.zip.configure({
+      workerURI: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.31/dist/zip-web-worker.js",
+      useWebWorkers: true,
+      useCompressionStream: true,
+      maxWorkers: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2))
+    });
+  }
+
   const $ = (id) => document.getElementById(id);
   const fileInput = $("fileInput");
   const dropzone = $("dropzone");
@@ -249,6 +262,7 @@
   const fileList = $("fileList");
   const binaryNote = $("binaryNote");
   const processBtn = $("processBtn");
+  const cancelBtn = $("cancelBtn");
   const statusDiv = $("status");
   const progressBar = $("progressBar");
   const cleanComments = $("cleanComments");
@@ -267,20 +281,46 @@
   const VISIO_EXTS = new Set([".vsdx", ".vsdm", ".vssx", ".vssm", ".vstx", ".vstm"]);
   const PDF_EXTS = new Set([".pdf"]);
   const RTF_EXTS = new Set([".rtf"]);
+  const TEXT_EXTS = new Set([
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson",
+    ".xml", ".xsd", ".xsl", ".xslt", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".log", ".sql", ".graphql", ".gql", ".tex", ".bib", ".rst", ".adoc",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx", ".ino", ".pde",
+    ".java", ".kt", ".kts", ".swift", ".rs", ".go", ".py", ".pyw", ".pyx",
+    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".php", ".cs",
+    ".rb", ".pl", ".pm", ".r", ".scala", ".dart", ".lua", ".groovy",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+    ".html", ".htm", ".css", ".scss", ".sass", ".less", ".svg",
+    ".dockerfile", ".makefile", ".gradle", ".properties", ".env", ".gitignore",
+    ".xacro", ".urdf", ".sdf", ".world", ".launch"
+  ]);
+  const TEXT_NAMES = new Set([
+    "dockerfile", "makefile", "cmakelists.txt", "license", "licence", "readme", "changelog",
+    ".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".dockerignore"
+  ]);
   const REMOTE_EXTS = new Set([
     ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp",
     ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".mp4", ".avi", ".mov",
-    ".eml", ".msg", ".epub", ".html", ".htm", ".doc", ".ppt", ".one", ".pub"
+    ".eml", ".msg", ".epub", ".doc", ".ppt", ".one", ".pub"
   ]);
 
   const MAX_EXCEL_CELLS_PER_SHEET = 250000;
-  const MAX_FILE_BYTES = 150 * 1024 * 1024;
-  const SMALL_CACHE_BYTES = 3 * 1024 * 1024;
+  const STREAM_TEXT_THRESHOLD = 16 * 1024 * 1024;
+  const MAX_PREVIEW_ITEMS = 2000;
+  const MEMORY_FALLBACK_LIMIT = 256 * 1024 * 1024;
+  const heapLimit = Number(performance?.memory?.jsHeapSizeLimit || 0);
+  const MAX_COMPLEX_DOCUMENT_BYTES = Math.floor(Math.min(
+    512 * 1024 * 1024,
+    Math.max(160 * 1024 * 1024, heapLimit ? heapLimit * 0.18 : 256 * 1024 * 1024)
+  ));
 
   let selectedFiles = [];
   let items = [];
   let filteredItems = [];
+  let zipReaders = [];
   let busy = false;
+  let cancelRequested = false;
+  let activeAbortController = null;
 
   function setStatus(html) { statusDiv.innerHTML = html; }
   function setProgress(current, total) {
@@ -290,9 +330,11 @@
   }
   function hideProgress() { progressBar.hidden = true; progressBar.value = 0; }
   function formatBytes(bytes) {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    const value = Number(bytes || 0);
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+    if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    return `${(value / 1024 ** 3).toFixed(2)} GB`;
   }
   function extensionOf(path) {
     const name = path.split("/").pop() || path;
@@ -308,6 +350,17 @@
     return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   function cdata(value) { return String(value).replace(/\]\]>/g, "]]]]><![CDATA[>"); }
+  function utf8Length(value) {
+    let bytes = 0;
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code < 0x80) bytes += 1;
+      else if (code < 0x800) bytes += 2;
+      else if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) { bytes += 4; i += 1; }
+      else bytes += 3;
+    }
+    return bytes;
+  }
   function exactArrayBuffer(bytes) {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   }
@@ -364,101 +417,162 @@
     return controls / sampleSize < .05;
   }
 
-  function classify(path, bytes) {
+  function classifyByPath(path) {
     const ext = extensionOf(path);
+    const name = baseName(path).toLowerCase();
     if (WORD_EXTS.has(ext)) return { category: "word", extractable: true, local: true, label: "Word local", icon: "📝" };
     if (SHEET_EXTS.has(ext)) return { category: "sheet", extractable: true, local: true, label: "Excel local", icon: "📊" };
     if (SLIDE_EXTS.has(ext)) return { category: "slides", extractable: true, local: true, label: "PowerPoint local", icon: "📽️" };
     if (VISIO_EXTS.has(ext)) return { category: "visio", extractable: true, local: true, label: "Visio local", icon: "🧩" };
     if (PDF_EXTS.has(ext)) return { category: "pdf", extractable: true, local: true, label: "PDF local", icon: "📕" };
     if (RTF_EXTS.has(ext)) return { category: "rtf", extractable: true, local: true, label: "RTF local", icon: "📄" };
-    if (isTextData(bytes)) return { category: "text", extractable: true, local: true, label: "Texto", icon: "📄" };
+    if (TEXT_EXTS.has(ext) || TEXT_NAMES.has(name) || (!ext && TEXT_NAMES.has(name))) {
+      return { category: "text", extractable: true, local: true, label: "Texto streaming", icon: "📄" };
+    }
+    if (ext === ".zip") return { category: "nested-zip", extractable: false, local: false, label: "ZIP anidado no expandido", icon: "📦" };
     if (REMOTE_EXTS.has(ext)) return { category: "remote", extractable: false, local: false, label: "Requiere Docling", icon: "🧠" };
     return { category: "binary", extractable: false, local: false, label: "Binario no compatible", icon: "🚫" };
   }
 
+  async function closeZipReaders() {
+    const readers = zipReaders;
+    zipReaders = [];
+    await Promise.allSettled(readers.map((reader) => reader.close()));
+  }
+
+  async function readZipEntry(item, writer) {
+    const controller = new AbortController();
+    activeAbortController = controller;
+    try {
+      return await item.entry.getData(writer, {
+        signal: controller.signal,
+        onprogress(index, max) {
+          if (max > 0) {
+            const pct = Math.min(100, Math.round((index / max) * 100));
+            setStatus(`⚙️ Descomprimiendo ${escapeHtml(item.path)} · ${pct}%`);
+          }
+        }
+      });
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+    }
+  }
+
+  async function streamDirectFile(item, writable) {
+    const controller = new AbortController();
+    activeAbortController = controller;
+    try {
+      return await item.file.stream().pipeTo(writable, { signal: controller.signal });
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+    }
+  }
+
   async function makeZipItems(file, prefix) {
-    if (!window.JSZip) throw new Error("JSZip no pudo cargarse. Comprueba la conexión a Internet.");
-    const zip = await JSZip.loadAsync(file);
-    const entries = Object.entries(zip.files).filter(([, entry]) => !entry.dir);
+    if (!window.zip?.ZipReader) throw new Error("zip.js no pudo cargarse. Comprueba la conexión a Internet.");
+    const reader = new window.zip.ZipReader(new window.zip.BlobReader(file), {
+      useWebWorkers: true,
+      useCompressionStream: true
+    });
+    zipReaders.push(reader);
     const result = [];
-    for (let index = 0; index < entries.length; index++) {
-      const [path, entry] = entries[index];
+    let index = 0;
+    for await (const entry of reader.getEntriesGenerator()) {
+      index += 1;
+      if (entry.directory) continue;
+      const path = String(entry.filename || "").replace(/\\/g, "/");
       const parts = path.split("/");
-      if (parts.some((part) => EXCLUDE_DIRS.has(part))) continue;
-      setStatus(`🔎 Escaneando ${escapeHtml(file.name)}: ${index + 1}/${entries.length}`);
-      const bytes = await entry.async("uint8array");
+      if (!path || parts.some((part) => EXCLUDE_DIRS.has(part))) continue;
       const finalPath = prefix ? `${prefix}/${path}` : path;
-      const type = classify(finalPath, bytes);
-      result.push({
+      const type = entry.encrypted
+        ? { category: "binary", extractable: false, local: false, label: "ZIP cifrado", icon: "🔐" }
+        : classifyByPath(finalPath);
+      const item = {
         path: finalPath,
         originalName: baseName(path),
-        size: bytes.length,
-        ...type,
-        cache: bytes.length <= SMALL_CACHE_BYTES ? bytes : null,
-        getBytes: async () => entry.async("uint8array")
-      });
-      await microYield(index);
+        size: Number(entry.uncompressedSize || 0),
+        compressedSize: Number(entry.compressedSize || 0),
+        source: "zip",
+        entry,
+        ...type
+      };
+      item.getBytes = async () => readZipEntry(item, new window.zip.Uint8ArrayWriter());
+      item.getBlob = async () => readZipEntry(item, new window.zip.BlobWriter("application/octet-stream"));
+      item.streamTo = async (writable) => readZipEntry(item, writable);
+      result.push(item);
+      if (index % 250 === 0) {
+        setStatus(`🔎 Leyendo índice de ${escapeHtml(file.name)}: ${index.toLocaleString("es-CL")} entradas`);
+        await microYield(index);
+      }
     }
     return result;
   }
 
   async function makeDirectItem(file, prefix = "") {
-    const bytes = new Uint8Array(await file.arrayBuffer());
     const path = prefix ? `${prefix}/${file.name}` : file.name;
-    const type = classify(path, bytes);
-    return {
+    const type = classifyByPath(path);
+    const item = {
       path,
       originalName: file.name,
-      size: bytes.length,
-      ...type,
-      cache: bytes.length <= SMALL_CACHE_BYTES ? bytes : null,
-      getBytes: async () => new Uint8Array(await file.arrayBuffer())
+      size: file.size,
+      compressedSize: file.size,
+      source: "file",
+      file,
+      ...type
     };
+    item.getBytes = async () => new Uint8Array(await file.arrayBuffer());
+    item.getBlob = async () => file;
+    item.streamTo = async (writable) => streamDirectFile(item, writable);
+    return item;
   }
 
   async function scanFiles(files) {
     if (busy) return;
     busy = true;
+    cancelRequested = false;
     items = [];
     processBtn.disabled = true;
+    cancelBtn.disabled = false;
     previewPanel.hidden = false;
-    fileList.innerHTML = '<div class="empty">🔎 Analizando archivos...</div>';
+    fileList.innerHTML = '<div class="empty">🔎 Leyendo índices sin descomprimir los archivos...</div>';
     hideProgress();
 
     try {
+      await closeZipReaders();
       const multipleRoots = files.length > 1;
       for (let i = 0; i < files.length; i++) {
+        if (cancelRequested) throw new DOMException("Escaneo cancelado", "AbortError");
         const file = files[i];
-        if (file.size > MAX_FILE_BYTES) {
-          items.push({
-            path: file.name, originalName: file.name, size: file.size,
-            category: "binary", extractable: false, local: false, label: "Supera 150 MB", icon: "⚠️",
-            getBytes: async () => new Uint8Array()
-          });
-          continue;
-        }
         setProgress(i, files.length);
         const ext = extensionOf(file.name);
         if (ext === ".zip") {
           const prefix = multipleRoots ? stripExt(file.name) : "";
-          items.push(...await makeZipItems(file, prefix));
+          const foundItems = await makeZipItems(file, prefix);
+          for (const foundItem of foundItems) items.push(foundItem);
         } else {
           items.push(await makeDirectItem(file));
         }
       }
-      items.sort((a, b) => a.path.localeCompare(b.path));
-      selectedSummary.innerHTML = `<strong>${files.length}</strong> entrada(s), <strong>${items.length}</strong> archivo(s) detectado(s).`;
+      if (items.length <= 250000) {
+        items.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" }));
+      }
+      const totalUncompressed = items.reduce((sum, item) => sum + Number(item.size || 0), 0);
+      selectedSummary.innerHTML = `<strong>${files.length}</strong> entrada(s), <strong>${items.length.toLocaleString("es-CL")}</strong> archivo(s), <strong>${formatBytes(totalUncompressed)}</strong> sin comprimir.`;
       renderList();
       processBtn.disabled = items.length === 0;
-      setStatus(`✅ Escaneo terminado. ${items.length} archivos encontrados.`);
+      setStatus(`✅ Índice terminado sin cargar el ZIP completo en memoria.\n📦 ${items.length.toLocaleString("es-CL")} archivos · ${formatBytes(totalUncompressed)} sin comprimir.\n💾 Límite del ZIP total: sin límite fijo. Protección por documento complejo: ${formatBytes(MAX_COMPLEX_DOCUMENT_BYTES)}.`);
     } catch (error) {
       console.error(error);
-      setStatus(`<span class="error">❌ Error al analizar: ${escapeHtml(error.message)}</span>`);
-      fileList.innerHTML = `<div class="empty">No fue posible leer los archivos.</div>`;
+      if (error?.name === "AbortError") {
+        setStatus('<span class="warn">⚠️ Escaneo cancelado.</span>');
+      } else {
+        setStatus(`<span class="error">❌ Error al analizar: ${escapeHtml(error.message)}</span>`);
+      }
+      fileList.innerHTML = `<div class="empty">No fue posible completar la lectura.</div>`;
     } finally {
       hideProgress();
       busy = false;
+      cancelBtn.disabled = true;
     }
   }
 
@@ -478,18 +592,21 @@
       fileList.innerHTML = '<div class="empty">No hay coincidencias.</div>';
       return;
     }
-    fileList.innerHTML = filteredItems.map((item) => {
+    const visibleItems = filteredItems.slice(0, MAX_PREVIEW_ITEMS);
+    fileList.innerHTML = visibleItems.map((item) => {
       const method = methodForDisplay(item);
       return `<div class="file-item">
         <span aria-hidden="true">${item.icon}</span>
         <div class="file-path">${escapeHtml(item.path)}<div class="file-meta">${formatBytes(item.size)} · ${escapeHtml(extensionOf(item.path) || "sin extensión")}</div></div>
         <span class="badge ${method.cls}">${escapeHtml(method.text)}</span>
       </div>`;
-    }).join("");
+    }).join("") + (filteredItems.length > MAX_PREVIEW_ITEMS
+      ? `<div class="empty">Vista limitada a ${MAX_PREVIEW_ITEMS.toLocaleString("es-CL")} filas para proteger la memoria. Todos los ${filteredItems.length.toLocaleString("es-CL")} archivos sí serán procesados.</div>`
+      : "");
     const localCount = items.filter((x) => x.local).length;
     const remoteCount = items.filter((x) => !x.local && x.category === "remote").length;
     const skippedCount = items.length - localCount - remoteCount;
-    binaryNote.textContent = `✅ ${localCount} extraíbles localmente · 🧠 ${remoteCount} compatibles con backend · 🚫 ${skippedCount} no compatibles`;
+    binaryNote.textContent = `✅ ${localCount} extraíbles localmente · 🧠 ${remoteCount} compatibles con backend · 🚫 ${skippedCount} no compatibles · ZIP total sin límite fijo · documentos complejos en memoria hasta ${formatBytes(MAX_COMPLEX_DOCUMENT_BYTES)}`;
   }
 
   function limpiarCodigo(texto, extension, fileName) {
@@ -733,20 +850,46 @@
     return { content: limpiarCodigo(text, extensionOf(item.path), item.originalName), method: "text-decoder-local", warnings: [] };
   }
 
-  async function extractRemote(bytes, item) {
+  async function extractRemote(source, item) {
     const base = doclingEndpoint.value.trim().replace(/\/$/, "");
     if (!base) throw new Error("No se configuró un backend Docling.");
+    const blob = source instanceof Blob ? source : new Blob([source], { type: "application/octet-stream" });
     const form = new FormData();
-    form.append("file", new Blob([bytes], { type: "application/octet-stream" }), item.originalName);
-    const response = await fetch(`${base}/api/extract`, { method: "POST", body: form });
-    let payload = null;
-    try { payload = await response.json(); } catch { /* ignore */ }
-    if (!response.ok) throw new Error(payload?.detail || payload?.error || `Docling respondió ${response.status}`);
-    return { content: payload.markdown || payload.text || "", method: payload.method || "docling-backend", warnings: payload.warnings || [] };
+    form.append("file", blob, item.originalName);
+    const controller = new AbortController();
+    activeAbortController = controller;
+    try {
+      const response = await fetch(`${base}/api/extract`, {
+        method: "POST",
+        body: form,
+        signal: controller.signal
+      });
+      let payload = null;
+      try { payload = await response.json(); } catch { /* ignore */ }
+      if (!response.ok) throw new Error(payload?.detail || payload?.error || `Docling respondió ${response.status}`);
+      return { content: payload.markdown || payload.text || "", method: payload.method || "docling-backend", warnings: payload.warnings || [] };
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+    }
   }
 
   async function extractItem(item) {
-    const bytes = item.cache || await item.getBytes();
+    if (cancelRequested) throw new DOMException("Procesamiento cancelado", "AbortError");
+    const complexLocal = !["text", "remote"].includes(item.category);
+    if (complexLocal && item.size > MAX_COMPLEX_DOCUMENT_BYTES) {
+      if (remoteConfigured()) {
+        const blob = await item.getBlob();
+        return extractRemote(blob, item);
+      }
+      throw new Error(`Documento individual de ${formatBytes(item.size)}: supera la protección local de ${formatBytes(MAX_COMPLEX_DOCUMENT_BYTES)}. Configura Docling o procesa el documento por separado.`);
+    }
+
+    if (item.category === "remote") {
+      const blob = await item.getBlob();
+      return extractRemote(blob, item);
+    }
+
+    const bytes = await item.getBytes();
     let result;
     switch (item.category) {
       case "word": result = await extractWord(bytes); break;
@@ -756,12 +899,12 @@
       case "pdf": result = await extractPdf(bytes); break;
       case "rtf": result = { content: decodeRtf(bytes), method: "rtf-local", warnings: [] }; break;
       case "text": result = await extractText(bytes, item); break;
-      case "remote": result = await extractRemote(bytes, item); break;
       default: throw new Error("Formato no compatible");
     }
     if (result.needsRemoteFallback && remoteConfigured()) {
       try {
-        const remote = await extractRemote(bytes, item);
+        const blob = new Blob([bytes], { type: "application/octet-stream" });
+        const remote = await extractRemote(blob, item);
         remote.warnings = [...(result.warnings || []), "Se utilizó Docling como respaldo porque PDF.js no encontró texto suficiente.", ...(remote.warnings || [])];
         return remote;
       } catch (error) {
@@ -771,100 +914,231 @@
     return result;
   }
 
-  function buildTreeString(paths) {
-    const root = {};
-    for (const path of paths) {
-      let node = root;
-      for (const part of path.split("/").filter(Boolean)) node = node[part] ||= {};
+  class FileSystemSink {
+    constructor(writable, filename) {
+      this.writable = writable;
+      this.filename = filename;
+      this.bytesWritten = 0;
+      this.mode = "filesystem";
     }
-    const lines = ["entrada/"];
-    function render(node, prefix = "") {
-      const names = Object.keys(node).sort(naturalPathSort);
-      names.forEach((name, index) => {
-        const last = index === names.length - 1;
-        const children = node[name];
-        const directory = Object.keys(children).length > 0;
-        lines.push(`${prefix}${last ? "└── " : "├── "}${name}${directory ? "/" : ""}`);
-        if (directory) render(children, `${prefix}${last ? "    " : "│   "}`);
+    async write(chunk) {
+      if (cancelRequested) throw new DOMException("Procesamiento cancelado", "AbortError");
+      const text = String(chunk);
+      await this.writable.write(text);
+      this.bytesWritten += utf8Length(text);
+    }
+    async close() { await this.writable.close(); }
+    async abort(reason) {
+      try { await this.writable.abort(reason); } catch { /* ignore */ }
+    }
+  }
+
+  class MemorySink {
+    constructor(filename) {
+      this.filename = filename;
+      this.parts = [];
+      this.bytesWritten = 0;
+      this.mode = "memory";
+    }
+    async write(chunk) {
+      if (cancelRequested) throw new DOMException("Procesamiento cancelado", "AbortError");
+      const text = String(chunk);
+      const size = utf8Length(text);
+      if (this.bytesWritten + size > MEMORY_FALLBACK_LIMIT) {
+        throw new Error(`Este navegador no permite escritura directa al disco y el consolidado superó ${formatBytes(MEMORY_FALLBACK_LIMIT)}. Usa Microsoft Edge o Google Chrome mediante HTTPS/localhost.`);
+      }
+      this.parts.push(text);
+      this.bytesWritten += size;
+    }
+    async close() {
+      const blob = new Blob(this.parts, { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = this.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      this.parts = [];
+    }
+    async abort() { this.parts = []; }
+  }
+
+  async function createOutputSink(filename) {
+    if (typeof window.showSaveFilePicker === "function" && window.isSecureContext) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: "Consolidado Code2Text", accept: { "text/plain": [".txt"] } }]
       });
+      const writable = await handle.createWritable({ keepExistingData: false });
+      return new FileSystemSink(writable, filename);
     }
-    render(root);
-    return lines.join("\n");
+    return new MemorySink(filename);
   }
 
-  function buildOutput(extracted, omitted, warnings) {
-    const tree = buildTreeString(items.map((x) => x.path));
-    let body = `<estructura_proyecto>\n${tree}\n</estructura_proyecto>\n\n<documentos_codigo version="2">\n`;
-    for (const item of extracted) {
-      body += `  <archivo ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || ".txt")}" metodo="${escapeAttr(item.method)}"><![CDATA[\n${cdata(item.content)}\n]]></archivo>\n`;
+  async function writeManifest(sink) {
+    await sink.write(`<estructura_proyecto version="3" modo="lista-streaming">
+`);
+    let batch = "";
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      batch += `  <entrada ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || "desconocido")}" tamano_bytes="${Number(item.size || 0)}" origen="${escapeAttr(item.source || "file")}" />
+`;
+      if (batch.length >= 1024 * 1024 || i === items.length - 1) {
+        await sink.write(batch);
+        batch = "";
+      }
+      if (i % 1000 === 0) await microYield(i);
     }
-    body += `</documentos_codigo>`;
-    if (includeOmitted.checked && omitted.length) {
-      body += `\n\n<archivos_omitidos>\n`;
-      for (const item of omitted) body += `  <archivo ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || "desconocido")}" tamano_bytes="${item.size}" motivo="${escapeAttr(item.reason)}" />\n`;
-      body += `</archivos_omitidos>`;
-    }
-    if (warnings.length) {
-      body += `\n\n<advertencias>\n${warnings.map((w) => `  <advertencia archivo="${escapeAttr(w.path)}"><![CDATA[${cdata(w.message)}]]></advertencia>`).join("\n")}\n</advertencias>`;
-    }
-    return body;
+    await sink.write(`</estructura_proyecto>
+
+<documentos_codigo version="3" modo="streaming">
+`);
   }
 
-  function downloadText(content, filename) {
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  async function streamLargeText(item, sink) {
+    let decoder = null;
+    let carry = "";
+    let pendingCR = false;
+    const writable = new WritableStream({
+      async write(chunk) {
+        if (cancelRequested) throw new DOMException("Procesamiento cancelado", "AbortError");
+        const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+        if (!decoder) decoder = decoderFor(bytes.subarray(0, Math.min(bytes.length, 4096)));
+        let text = decoder.decode(bytes, { stream: true }).replace(/\u0000/g, "");
+        if (pendingCR) {
+          text = `\r${text}`;
+          pendingCR = false;
+        }
+        if (text.endsWith("\r")) {
+          text = text.slice(0, -1);
+          pendingCR = true;
+        }
+        text = text.replace(/\r\n?/g, "\n");
+        const combined = carry + text;
+        if (combined.length <= 2) {
+          carry = combined;
+          return;
+        }
+        const safe = combined.slice(0, -2);
+        carry = combined.slice(-2);
+        await sink.write(cdata(safe));
+      },
+      async close() {
+        const tail = carry + (pendingCR ? "\n" : "") + (decoder ? decoder.decode() : "");
+        if (tail) await sink.write(cdata(tail.replace(/\u0000/g, "").replace(/\r\n?/g, "\n")));
+      }
+    });
+    await item.streamTo(writable);
+  }
+
+  async function writeOmitted(sink, item, reason) {
+    if (!includeOmitted.checked) return;
+    await sink.write(`  <archivo ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || "desconocido")}" estado="omitido" tamano_bytes="${Number(item.size || 0)}" motivo="${escapeAttr(reason)}" />\n`);
+  }
+
+  async function writeWarnings(sink, item, warnings) {
+    for (const warning of warnings || []) {
+      await sink.write(`  <advertencia archivo="${escapeAttr(item.path)}"><![CDATA[${cdata(warning)}]]></advertencia>\n`);
+    }
   }
 
   async function processAll() {
     if (busy || !items.length) return;
-    busy = true;
-    processBtn.disabled = true;
-    const extracted = [];
-    const omitted = [];
-    const warnings = [];
+    const rootName = selectedFiles.length === 1 ? stripExt(selectedFiles[0].name) : "seleccion_multiple";
+    const filename = `code2text_${rootName}_${new Date().toISOString().slice(0, 10)}.txt`;
+    let sink = null;
+    let extractedCount = 0;
+    let omittedCount = 0;
+    let warningCount = 0;
 
     try {
+      sink = await createOutputSink(filename);
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setStatus('<span class="warn">⚠️ Guardado cancelado. No se inició el procesamiento.</span>');
+        return;
+      }
+      setStatus(`<span class="error">❌ No fue posible crear el archivo de salida: ${escapeHtml(error.message)}</span>`);
+      return;
+    }
+
+    busy = true;
+    cancelRequested = false;
+    processBtn.disabled = true;
+    cancelBtn.disabled = false;
+
+    try {
+      await writeManifest(sink);
       for (let i = 0; i < items.length; i++) {
+        if (cancelRequested) throw new DOMException("Procesamiento cancelado", "AbortError");
         const item = items[i];
         setProgress(i, items.length);
-        setStatus(`⚙️ Procesando ${i + 1}/${items.length}\n${escapeHtml(item.path)}`);
+        setStatus(`⚙️ Procesando ${i + 1}/${items.length}\n${escapeHtml(item.path)}\n💾 Salida escrita: ${formatBytes(sink.bytesWritten)} (${sink.mode === "filesystem" ? "directo al disco" : "memoria compatible"})`);
         const canRemote = item.category === "remote" && remoteConfigured();
         if (!item.local && !canRemote) {
-          omitted.push({ ...item, reason: item.category === "remote" ? "Requiere backend Docling" : item.label });
+          omittedCount += 1;
+          await writeOmitted(sink, item, item.category === "remote" ? "Requiere backend Docling" : item.label);
           continue;
         }
+
         try {
-          const result = await extractItem(item);
-          const content = normalizeText(result.content);
-          if (content) extracted.push({ path: item.path, method: result.method, content });
-          else omitted.push({ ...item, reason: "No se encontró contenido textual" });
-          for (const warning of result.warnings || []) warnings.push({ path: item.path, message: warning });
+          if (item.category === "text" && item.size >= STREAM_TEXT_THRESHOLD) {
+            await sink.write(`  <archivo ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || ".txt")}" metodo="text-stream-local" estado="extraido"><![CDATA[\n`);
+            await streamLargeText(item, sink);
+            await sink.write(`\n]]></archivo>\n`);
+            extractedCount += 1;
+            if (cleanComments.checked) {
+              const warning = `La limpieza de comentarios se omitió porque el archivo supera ${formatBytes(STREAM_TEXT_THRESHOLD)} y se procesó por streaming.`;
+              await writeWarnings(sink, item, [warning]);
+              warningCount += 1;
+            }
+          } else {
+            const result = await extractItem(item);
+            const content = normalizeText(result.content);
+            if (content) {
+              await sink.write(`  <archivo ruta="${escapeAttr(item.path)}" tipo="${escapeAttr(extensionOf(item.path) || ".txt")}" metodo="${escapeAttr(result.method)}" estado="extraido"><![CDATA[\n${cdata(content)}\n]]></archivo>\n`);
+              extractedCount += 1;
+            } else {
+              omittedCount += 1;
+              await writeOmitted(sink, item, "No se encontró contenido textual");
+            }
+            await writeWarnings(sink, item, result.warnings || []);
+            warningCount += (result.warnings || []).length;
+          }
         } catch (error) {
+          if (error?.name === "AbortError") throw error;
           console.error(`Error en ${item.path}`, error);
-          omitted.push({ ...item, reason: error.message });
-          warnings.push({ path: item.path, message: `No se pudo extraer: ${error.message}` });
+          omittedCount += 1;
+          warningCount += 1;
+          await writeOmitted(sink, item, error.message);
+          await writeWarnings(sink, item, [`No se pudo extraer: ${error.message}`]);
         }
         await microYield(i);
       }
+      await sink.write(`</documentos_codigo>\n`);
       setProgress(items.length, items.length);
-      const output = buildOutput(extracted, omitted, warnings);
-      const rootName = selectedFiles.length === 1 ? stripExt(selectedFiles[0].name) : "seleccion_multiple";
-      const filename = `code2text_${rootName}_${new Date().toISOString().slice(0, 10)}.txt`;
-      downloadText(output, filename);
-      setStatus(`<span class="ok">✅ Extracción completada</span>\n📄 Contenido extraído: ${extracted.length}\n🚫 Omitidos: ${omitted.length}\n⚠️ Advertencias: ${warnings.length}\n📥 Archivo generado: ${escapeHtml(filename)}`);
+      await sink.close();
+      await closeZipReaders();
+      items = [];
+      processBtn.disabled = true;
+      setStatus(`<span class="ok">✅ Extracción completada</span>\n📄 Contenido extraído: ${extractedCount.toLocaleString("es-CL")}\n🚫 Omitidos: ${omittedCount.toLocaleString("es-CL")}\n⚠️ Advertencias: ${warningCount.toLocaleString("es-CL")}\n💾 Escritura total: ${formatBytes(sink.bytesWritten)}\n📥 Archivo: ${escapeHtml(filename)}\n${sink.mode === "filesystem" ? "Modo alto volumen: escritura directa al disco." : "Modo compatible: salida acumulada en memoria."}`);
     } catch (error) {
       console.error(error);
-      setStatus(`<span class="error">❌ Error crítico: ${escapeHtml(error.message)}</span>`);
+      await sink.abort(error).catch(() => {});
+      if (error?.name === "AbortError") {
+        setStatus('<span class="warn">⚠️ Procesamiento cancelado. El archivo de salida incompleto fue descartado.</span>');
+      } else {
+        setStatus(`<span class="error">❌ Error crítico: ${escapeHtml(error.message)}</span>`);
+      }
     } finally {
+      activeAbortController?.abort();
+      activeAbortController = null;
       busy = false;
-      processBtn.disabled = false;
+      cancelRequested = false;
+      cancelBtn.disabled = true;
+      if (items.length) processBtn.disabled = false;
       setTimeout(hideProgress, 900);
     }
   }
@@ -893,7 +1167,9 @@
     }
   }
 
-  function handleFiles(fileListValue) {
+  async function handleFiles(fileListValue) {
+    if (busy) return;
+    await closeZipReaders();
     selectedFiles = Array.from(fileListValue || []);
     if (!selectedFiles.length) {
       selectedSummary.textContent = "Ningún archivo seleccionado.";
@@ -910,6 +1186,12 @@
   searchInput.addEventListener("input", renderList);
   doclingEndpoint.addEventListener("input", renderList);
   processBtn.addEventListener("click", processAll);
+  cancelBtn.addEventListener("click", () => {
+    cancelRequested = true;
+    activeAbortController?.abort();
+    cancelBtn.disabled = true;
+    setStatus('<span class="warn">⚠️ Cancelando de forma segura...</span>');
+  });
   testBackendBtn.addEventListener("click", testBackend);
 
   ["dragenter", "dragover"].forEach((name) => dropzone.addEventListener(name, (event) => {

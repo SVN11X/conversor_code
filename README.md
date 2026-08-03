@@ -4,12 +4,13 @@ Convierte proyectos comprimidos y documentos en un único archivo de texto estru
 
 ## Cambio principal de esta versión
 
-La versión anterior usaba JSZip para abrir el ZIP exterior, descomprimía archivos durante el escaneo y construía todo el resultado en memoria. Eso impedía trabajar de forma confiable con ZIP de 1 GB o más.
+La implementación original usaba JSZip para abrir el ZIP exterior y cargaba demasiado contenido en memoria. La versión streaming posterior cambió a zip.js, pero lo cargaba junto con su Web Worker desde un CDN externo; si ese recurso era bloqueado en GitHub Pages, ningún ZIP podía abrirse, aunque pesara pocos bytes.
 
-La versión Streaming utiliza:
+La versión corregida utiliza:
 
-- **zip.js** para leer ZIP y ZIP64 sin cargar el archivo completo en RAM.
-- `getEntriesGenerator()` para recorrer el índice de forma incremental.
+- Un **lector ZIP/ZIP64 local incluido en `assets/native-zip.js`**, sin depender de CDN ni Web Workers externos.
+- Lectura por rangos del directorio central en bloques de 4 MB.
+- Descompresión nativa de entradas `STORE` y `DEFLATE` mediante `DecompressionStream`.
 - Descompresión de **una entrada por vez**.
 - Escritura directa mediante **File System Access API** en Edge y Chrome.
 - Procesamiento por streaming para archivos de texto de 16 MB o más.
@@ -56,7 +57,7 @@ Abre:
 http://localhost:8080
 ```
 
-No se recomienda abrir `index.html` directamente con `file://`, porque algunas API de navegador y trabajadores pueden quedar restringidos.
+No se recomienda abrir `index.html` directamente con `file://`, porque la escritura directa al disco y algunas bibliotecas pueden quedar restringidas. El lector ZIP ya no necesita un Web Worker externo.
 
 ## Formato del resultado
 
@@ -89,9 +90,10 @@ La estructura se escribe como lista en vez de árbol para no construir en memori
 ### ZIP exterior
 
 - Se mantiene una referencia al archivo seleccionado.
-- zip.js lee el directorio central y los rangos necesarios del `Blob`.
-- El escaneo no extrae el contenido de las entradas.
-- Cada entrada se libera después de procesarla.
+- `assets/native-zip.js` localiza el directorio central ZIP/ZIP64 y lo recorre por bloques.
+- El escaneo no descomprime el contenido de las entradas.
+- Cada entrada se lee desde un rango del `Blob` y se descomprime solamente al procesarla.
+- El funcionamiento básico de ZIP no depende de Internet ni de un worker servido desde otro dominio.
 
 ### Texto grande
 
@@ -143,33 +145,40 @@ environment:
 
 ## Publicar en GitHub Pages
 
-1. Sube el contenido del repositorio.
+1. Sube **todo** el contenido del repositorio, incluida la carpeta `assets/` y el archivo `.nojekyll`.
 2. Abre **Settings → Pages**.
 3. Selecciona **Deploy from a branch**.
 4. Elige la rama principal y la carpeta raíz.
 5. Guarda.
+6. Comprueba que `assets/native-zip.js` y `assets/jszip.min.js` no respondan con error 404.
 
-GitHub Pages ejecuta únicamente el modo local. Docling debe publicarse por separado y, para una página HTTPS, también debe exponerse mediante HTTPS.
+GitHub Pages ejecuta únicamente el modo local. Docling debe publicarse por separado y, para una página HTTPS, también debe exponerse mediante HTTPS. Si falta la carpeta `assets`, la interfaz mostrará un mensaje claro.
 
 ## Arquitectura
 
 ```text
 code2text-universal-streaming/
+├── .nojekyll
 ├── index.html
 ├── README.md
 ├── CHANGELOG.md
 ├── THIRD_PARTY_NOTICES.md
+├── assets/
+│   ├── native-zip.js
+│   ├── jszip.min.js
+│   └── JSZIP-LICENSE.md
 ├── docker-compose.yml
 ├── backend/
 │   ├── app.py
 │   ├── Dockerfile
 │   └── requirements.txt
 └── tests/
+    ├── test_native_zip.mjs
     └── validate_project.py
 ```
 
-- **zip.js**: ZIP exterior, ZIP64 y descompresión incremental.
-- **JSZip**: contenedores OOXML individuales ya extraídos del ZIP exterior.
+- **Code2Text Native ZIP Reader**: ZIP exterior, ZIP64, lectura por rangos y descompresión incremental sin CDN.
+- **JSZip local**: contenedores OOXML individuales ya extraídos del ZIP exterior.
 - **Mammoth.js**: Word moderno.
 - **SheetJS**: Excel.
 - **PDF.js**: capa de texto PDF.
@@ -180,6 +189,7 @@ code2text-universal-streaming/
 ## Limitaciones
 
 - Un ZIP cifrado necesita contraseña y actualmente se registra como omitido.
+- Se admiten los métodos ZIP habituales `STORE` (0) y `DEFLATE` (8). Otros métodos, ZIP multidisco y enlaces simbólicos se registran como omitidos.
 - Los ZIP anidados se registran, pero no se expanden automáticamente para evitar recursión y uso de disco inesperados.
 - Un documento individual muy grande puede exceder la memoria que requieren Mammoth, SheetJS, PDF.js o JSZip interno, aunque el ZIP exterior se procese eficientemente.
 - PDF.js no realiza OCR.
@@ -194,4 +204,4 @@ code2text-universal-streaming/
 python tests/validate_project.py
 ```
 
-El script comprueba la sintaxis JavaScript y Python, la presencia del procesamiento incremental y que no se haya reintroducido el antiguo límite global de 150 MB.
+El script comprueba la sintaxis JavaScript y Python, verifica las dependencias ZIP locales y prueba extracción `STORE`, `DEFLATE`, nombres UTF-8, archivos vacíos y ZIP64. También comprueba que no se haya reintroducido el antiguo límite global de 150 MB.

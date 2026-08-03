@@ -1,5 +1,16 @@
 # Cambios principales
 
+## Code2Text Universal Streaming 2.1.0
+
+- Corrige la falla de GitHub Pages que impedía abrir cualquier ZIP cuando el CDN o el Web Worker externo de zip.js era bloqueado.
+- Sustituye el lector ZIP exterior por `assets/native-zip.js`, publicado dentro del mismo repositorio.
+- Añade lectura ZIP/ZIP64 por rangos y directorio central en bloques de 4 MB.
+- Añade descompresión streaming local para métodos STORE y DEFLATE.
+- Incluye JSZip 3.10.1 local para los contenedores Office.
+- Añade diagnóstico visible cuando la carpeta `assets` no fue publicada.
+- Permite volver a seleccionar el mismo archivo ZIP sin recargar la página.
+- Añade `.nojekyll` y pruebas funcionales del lector ZIP local.
+
 ## Code2Text Universal Streaming 2.0.0
 
 - Sustituye JSZip por zip.js para el ZIP exterior.

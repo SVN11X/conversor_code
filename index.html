@@ -6,12 +6,12 @@
   <meta name="description" content="Extrae código y contenido de documentos Microsoft, PDF y otros formatos directamente en el navegador.">
   <title>Code2Text Universal · Document Extractor</title>
 
-  <!-- Dependencias cargadas desde CDN. Para una instalación totalmente aislada, véase README.md. -->
-  <script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.31/dist/zip.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-  <script src="https://unpkg.com/mammoth@1.12.0/mammoth.browser.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- El lector ZIP y JSZip se publican localmente para que GitHub Pages no dependa de workers/CDN externos. -->
+  <script src="./assets/native-zip.js"></script>
+  <script src="./assets/jszip.min.js"></script>
+  <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script defer src="https://unpkg.com/mammoth@1.12.0/mammoth.browser.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
   <style>
     :root {
@@ -239,19 +239,6 @@
 (() => {
   "use strict";
 
-  if (window.pdfjsLib) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  }
-
-  if (window.zip?.configure) {
-    window.zip.configure({
-      workerURI: "https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.8.31/dist/zip-web-worker.js",
-      useWebWorkers: true,
-      useCompressionStream: true,
-      maxWorkers: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2))
-    });
-  }
-
   const $ = (id) => document.getElementById(id);
   const fileInput = $("fileInput");
   const dropzone = $("dropzone");
@@ -269,6 +256,14 @@
   const includeOmitted = $("includeOmitted");
   const doclingEndpoint = $("doclingEndpoint");
   const testBackendBtn = $("testBackendBtn");
+
+  if (!window.Code2TextZip?.NativeZipReader) {
+    setStatus('<span class="error">❌ Falta assets/native-zip.js. Publica la carpeta assets completa en GitHub Pages.</span>');
+    fileInput.disabled = true;
+  }
+  if (!window.JSZip) {
+    console.warn("JSZip local no está disponible; los documentos Office comprimidos no podrán extraerse.");
+  }
 
   const EXCLUDE_DIRS = new Set([
     "__pycache__", ".git", ".venv", "venv", "env", ".env", "node_modules",
@@ -440,19 +435,34 @@
     await Promise.allSettled(readers.map((reader) => reader.close()));
   }
 
-  async function readZipEntry(item, writer) {
+  async function readZipEntryBytes(item) {
     const controller = new AbortController();
     activeAbortController = controller;
     try {
-      return await item.entry.getData(writer, {
-        signal: controller.signal,
-        onprogress(index, max) {
-          if (max > 0) {
-            const pct = Math.min(100, Math.round((index / max) * 100));
-            setStatus(`⚙️ Descomprimiendo ${escapeHtml(item.path)} · ${pct}%`);
-          }
-        }
-      });
+      setStatus(`⚙️ Descomprimiendo ${escapeHtml(item.path)} · ${formatBytes(item.size)}`);
+      return await item.entry.getUint8Array({ signal: controller.signal });
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+    }
+  }
+
+  async function readZipEntryBlob(item) {
+    const controller = new AbortController();
+    activeAbortController = controller;
+    try {
+      setStatus(`⚙️ Descomprimiendo ${escapeHtml(item.path)} · ${formatBytes(item.size)}`);
+      return await item.entry.getBlob("application/octet-stream", { signal: controller.signal });
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+    }
+  }
+
+  async function streamZipEntry(item, writable) {
+    const controller = new AbortController();
+    activeAbortController = controller;
+    try {
+      setStatus(`⚙️ Descomprimiendo por streaming ${escapeHtml(item.path)} · ${formatBytes(item.size)}`);
+      return await item.entry.pipeTo(writable, { signal: controller.signal });
     } finally {
       if (activeAbortController === controller) activeAbortController = null;
     }
@@ -469,43 +479,58 @@
   }
 
   async function makeZipItems(file, prefix) {
-    if (!window.zip?.ZipReader) throw new Error("zip.js no pudo cargarse. Comprueba la conexión a Internet.");
-    const reader = new window.zip.ZipReader(new window.zip.BlobReader(file), {
-      useWebWorkers: true,
-      useCompressionStream: true
-    });
+    if (!window.Code2TextZip?.NativeZipReader) {
+      throw new Error("El lector ZIP local no pudo cargarse. Verifica que assets/native-zip.js esté publicado junto a index.html.");
+    }
+    const reader = new window.Code2TextZip.NativeZipReader(file);
     zipReaders.push(reader);
     const result = [];
+    const controller = new AbortController();
+    activeAbortController = controller;
     let index = 0;
-    for await (const entry of reader.getEntriesGenerator()) {
-      index += 1;
-      if (entry.directory) continue;
-      const path = String(entry.filename || "").replace(/\\/g, "/");
-      const parts = path.split("/");
-      if (!path || parts.some((part) => EXCLUDE_DIRS.has(part))) continue;
-      const finalPath = prefix ? `${prefix}/${path}` : path;
-      const type = entry.encrypted
-        ? { category: "binary", extractable: false, local: false, label: "ZIP cifrado", icon: "🔐" }
-        : classifyByPath(finalPath);
-      const item = {
-        path: finalPath,
-        originalName: baseName(path),
-        size: Number(entry.uncompressedSize || 0),
-        compressedSize: Number(entry.compressedSize || 0),
-        source: "zip",
-        entry,
-        ...type
-      };
-      item.getBytes = async () => readZipEntry(item, new window.zip.Uint8ArrayWriter());
-      item.getBlob = async () => readZipEntry(item, new window.zip.BlobWriter("application/octet-stream"));
-      item.streamTo = async (writable) => readZipEntry(item, writable);
-      result.push(item);
-      if (index % 250 === 0) {
-        setStatus(`🔎 Leyendo índice de ${escapeHtml(file.name)}: ${index.toLocaleString("es-CL")} entradas`);
-        await microYield(index);
+    try {
+      for await (const entry of reader.entries({ signal: controller.signal })) {
+        index += 1;
+        if (entry.directory) continue;
+        const path = String(entry.filename || "").replace(/\\/g, "/");
+        const parts = path.split("/");
+        if (!path || parts.some((part) => EXCLUDE_DIRS.has(part))) continue;
+        const finalPath = prefix ? `${prefix}/${path}` : path;
+        const supportedCompression = entry.compressionMethod === 0 || entry.compressionMethod === 8;
+        const type = entry.encrypted
+          ? { category: "binary", extractable: false, local: false, label: "ZIP cifrado", icon: "🔐" }
+          : entry.symlink
+            ? { category: "binary", extractable: false, local: false, label: "Enlace simbólico omitido", icon: "🔗" }
+            : !supportedCompression
+              ? { category: "binary", extractable: false, local: false, label: `Compresión ZIP no compatible (${entry.compressionMethod})`, icon: "🚫" }
+              : classifyByPath(finalPath);
+        const item = {
+          path: finalPath,
+          originalName: baseName(path),
+          size: Number(entry.uncompressedSize || 0),
+          compressedSize: Number(entry.compressedSize || 0),
+          compressionMethod: Number(entry.compressionMethod),
+          source: "zip",
+          entry,
+          ...type
+        };
+        item.getBytes = async () => readZipEntryBytes(item);
+        item.getBlob = async () => readZipEntryBlob(item);
+        item.streamTo = async (writable) => streamZipEntry(item, writable);
+        result.push(item);
+        if (index % 250 === 0) {
+          setStatus(`🔎 Leyendo índice local de ${escapeHtml(file.name)}: ${index.toLocaleString("es-CL")} entradas`);
+          await microYield(index);
+        }
       }
+      return result;
+    } catch (error) {
+      await reader.close().catch(() => {});
+      zipReaders = zipReaders.filter((candidate) => candidate !== reader);
+      throw error;
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
     }
-    return result;
   }
 
   async function makeDirectItem(file, prefix = "") {
@@ -750,6 +775,7 @@
   }
 
   async function extractPowerPoint(bytes) {
+    if (!window.JSZip) throw new Error("JSZip local no pudo cargarse.");
     const zip = await JSZip.loadAsync(bytes);
     const slidePaths = Object.keys(zip.files).filter((p) => /^ppt\/slides\/slide\d+\.xml$/i.test(p)).sort(naturalPathSort);
     const notePaths = Object.keys(zip.files).filter((p) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/i.test(p)).sort(naturalPathSort);
@@ -776,6 +802,7 @@
   }
 
   async function extractVisio(bytes) {
+    if (!window.JSZip) throw new Error("JSZip local no pudo cargarse.");
     const zip = await JSZip.loadAsync(bytes);
     const paths = Object.keys(zip.files)
       .filter((p) => /^visio\/(pages\/page|masters\/master)\d+\.xml$/i.test(p))
@@ -811,6 +838,9 @@
 
   async function extractPdf(bytes) {
     if (!window.pdfjsLib) throw new Error("PDF.js no pudo cargarse.");
+    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
     const loadingTask = pdfjsLib.getDocument({ data: bytes.slice() });
     const pdf = await loadingTask.promise;
     const metadata = await pdf.getMetadata().catch(() => null);
@@ -1182,6 +1212,9 @@
     scanFiles(selectedFiles);
   }
 
+  fileInput.addEventListener("click", () => {
+    if (!busy) fileInput.value = "";
+  });
   fileInput.addEventListener("change", () => handleFiles(fileInput.files));
   searchInput.addEventListener("input", renderList);
   doclingEndpoint.addEventListener("input", renderList);
